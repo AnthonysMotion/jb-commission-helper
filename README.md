@@ -33,7 +33,7 @@ You'll need a userscript manager browser extension:
 3. Click "Create a new script"
 4. Copy the entire contents of `jb-commission-helper.user.js` into the editor
 5. Save the script (Ctrl+S / Cmd+S)
-6. Navigate to the JB Hi-Fi commission system: `https://jbh-all-commissions-ui-webapp-prod.azurewebsites.net/`
+6. Navigate to the JB Hi-Fi commission website
 
 The script will automatically activate when you visit the commission system website.
 
