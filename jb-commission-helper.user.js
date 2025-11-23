@@ -1045,7 +1045,7 @@
             });
 
             const manualHeader = document.createElement("div");
-            manualHeader.textContent = "Manual Percentage (if incorrect)";
+            manualHeader.textContent = "Manual Override (if incorrect)";
             Object.assign(manualHeader.style, {
                 textAlign: "center",
                 fontSize: "11px",
