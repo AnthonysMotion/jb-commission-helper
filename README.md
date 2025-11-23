@@ -159,7 +159,7 @@ The script automatically categorizes products into:
 ## Troubleshooting
 
 ### Script Not Working
-1. Ensure you're on the correct website: `jbh-all-commissions-ui-webapp-prod.azurewebsites.net`
+1. Ensure you're on the correct website: `jbh....azurewebsites.net`
 2. Check that your userscript manager is enabled
 3. Verify the script is active in the userscript manager dashboard
 4. Refresh the page
