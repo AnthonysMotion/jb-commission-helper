@@ -14,7 +14,7 @@ A browser userscript that automatically calculates and adjusts commission values
 - 🎨 **Modern Glassmorphism UI** - Sleek, modern interface that matches the commission system's design
 - 🔧 **Manual Override Options** - Quick percentage buttons (0.2%, 0.5%, 1%, 1.5%, 2%, 2.3%) for manual adjustments
 - 📝 **Detailed Notes** - Automatically generates appropriate notes and comments for each adjustment
-- 🔄 **Context-Aware Logic** - Handles complex scenarios like bundles, multipliers, and dynamic product classification
+- 🔄 **Context-Aware Logic** - Handles complex scenarios like product attaches, multipliers, and dynamic product classification
 
 ## Installation
 
