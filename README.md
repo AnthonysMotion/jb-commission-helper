@@ -212,14 +212,6 @@ MIT License - Feel free to use and modify for your own purposes.
 Created by Anthony Thach  
 Website: [anthonythach.com](https://anthonythach.com)
 
-## Version History
-
-- **v7.4**: Current version
-  - Enhanced AirPods solo detection
-  - Improved UI positioning and styling
-  - Fixed stale UI data on navigation
-  - Added robust product name detection
-
 ---
 
 **Note**: This script is designed specifically for the JB Hi-Fi commission management system. It may not work with other systems or if the target website structure changes significantly.
