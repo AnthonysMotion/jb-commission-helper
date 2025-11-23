@@ -58,7 +58,7 @@ Each product on the Sale Overview page will display an information box in the to
 - **Product Details**: Category, stock type, and bundle status
 - **Manual Percentage Buttons**: Quick buttons to apply specific percentages (0.2%, 0.5%, 1%, 1.5%, 2%, 2.3%)
 
-Click any percentage button to manually apply that rate to the specific product.
+Click any percentage button to automatically apply that rate to the specific product.
 
 ## Commission Rules
 
