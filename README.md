@@ -2,6 +2,7 @@
 
 A browser userscript that automatically calculates and adjusts commission values for retail sales on the JB Hi-Fi commission management system. This tool streamlines the commission adjustment process by intelligently categorizing products and applying the correct commission rates based on company policies.
 
+
 ![Version](https://img.shields.io/badge/version-7.4-blue.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 
@@ -15,6 +16,8 @@ A browser userscript that automatically calculates and adjusts commission values
 - 🔧 **Manual Override Options** - Quick percentage buttons (0.2%, 0.5%, 1%, 1.5%, 2%, 2.3%) for manual adjustments
 - 📝 **Detailed Notes** - Automatically generates appropriate notes and comments for each adjustment
 - 🔄 **Context-Aware Logic** - Handles complex scenarios like product attaches, multipliers, and dynamic product classification
+
+<img width="1820" height="1198" alt="image" src="https://github.com/user-attachments/assets/465171e2-5a90-4f82-8f4d-25ea938e741d" />
 
 ## Installation
 
