@@ -911,7 +911,15 @@
   function injectRowInfo() {
     // Only run on Overview page
     const headers = Array.from(document.querySelectorAll("h2"));
-    if (!headers.some(h => h.textContent.includes("Sale Overview"))) return;
+    if (!headers.some(h => h.textContent.includes("Sale Overview"))) {
+      // Clean up any orphaned UI elements when not on Overview page
+      $$('.jbh-row-info').forEach(el => el.remove());
+      return;
+    }
+
+    // Clean up all existing UI elements before processing new ones
+    // This prevents duplicates when switching between sales
+    $$('.jbh-row-info').forEach(el => el.remove());
 
     const containers = getProductContainers();
     if (!containers.length) return;
