@@ -158,9 +158,44 @@
   
   // Main Product SKUs
   // These SKUs will be treated as primary/main products (not accessories)
+  // 
+  // To find SKUs: Visit each product page on jbhifi.co.nz and look for "SKU: XXXXXX" on the page
+  // MacBook product listing: https://www.jbhifi.co.nz/collections/computers-tablets/apple-macbooks
   const SKU_MAIN_PRODUCTS = new Set([
-    // Add main product SKUs here (as strings)
-    // Example: "123456", "789012", "345678"
+    // MacBook Pro SKUs
+    "465729", // MacBook Pro 14" M5 512GB/16GB Space Black
+    "465733", // MacBook Pro 14" M5 1TB/24GB Space Black
+    "448451", // MacBook Pro 14" M4 Pro 512GB/24GB Space Black
+    "448452", // MacBook Pro 14" M4 Pro 512GB/24GB Silver
+    "465734", // Apple MacBook Pro 14-inch with M5 Chip, 1TB/24GB (Silver)
+    "465730", // Apple MacBook Pro 14-inch with M5 Chip, 512GB/16GB (Silver)
+    "465731", // Apple MacBook Pro 14-inch with M5 Chip, 1TB/16GB (Space Black)
+    "465732", // Apple MacBook Pro 14-inch with M5 Chip, 1TB/16GB (Silver)
+
+    // MacBook Air SKUs
+    "453376", // MacBook Air 13" M4 256GB/16GB Midnight
+    "453376", // MacBook Air 13" M4 256GB/16GB Silver
+    "453378", // MacBook Air 13" M4 256GB/16GB Starlight
+    "453379", // MacBook Air 13" M4 256GB/16GB Sky Blue
+
+    "453379", // MacBook Air 13" M4 512GB/16GB Starlight
+    "453381", // MacBook Air 13" M4 512GB/16GB Midnight
+    "453377", // MacBook Air 13" M4 512GB/16GB Silver
+    "453371", // MacBook Air 13" M4 512GB/16GB Sky Blue
+
+
+    "448417", // MacBook Air 13" M2 256GB/16GB Midnight
+    "448416", // MacBook Air 13" M2 256GB/16GB Starlight
+
+    "453382", // Apple MacBook Air 15-inch with M4 Chip, 256GB/16GB (Silver)
+    "453384", // Apple MacBook Air 15-inch with M4 Chip, 256GB/16GB (Starlight)
+    "453386", // Apple MacBook Air 15-inch with M4 Chip, 256GB/16GB (Midnight)
+    "453373", // Apple MacBook Air 15-inch with M4 Chip, 256GB/16GB (Sky Blue)
+    
+    "453383", // Apple MacBook Air 15-inch with M4 Chip, 512GB/16GB (Silver)
+    "453385", // Apple MacBook Air 15-inch with M4 Chip, 512GB/16GB (Starlight)
+    "453387", // Apple MacBook Air 15-inch with M4 Chip, 512GB/16GB (Midnight)
+    "453374", // Apple MacBook Air 15-inch with M4 Chip, 512GB/16GB (Sky Blue)
   ]);
 
   // Attach/Accessory SKUs by category
@@ -173,8 +208,7 @@
   ]);
 
   const SKU_ATTACH_MACBOOK = new Set([
-    // MacBook accessories/attach products (cases, adapters, etc. for MacBooks)
-    // Example: "333333", "444444"
+
   ]);
 
   const SKU_ATTACH_IPAD = new Set([
