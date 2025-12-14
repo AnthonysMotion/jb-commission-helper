@@ -248,6 +248,14 @@
   const RX_CAMERA_EXCLUDE =
     /\b(LENS|BATTERY|CHARGER|CASE|STRAP|MOUNT|SD|MEMORY|HEADPHONE|HEADPHONES|BUDS|EARBUD|SPEAKER|AUDIO)\b/i;
 
+  function isAppleWatch(nameUpper) {
+    // Check for Apple Watch patterns (must check before accessory hints since "WATCH" is in RX_ACCESSORY_HINTS)
+    const n = nameUpper.replace(/\s+/g, " ");
+    return /\bAPPLE\s+WATCH/i.test(n) || 
+           /\bWATCH\s+(SERIES|SE|ULTRA)/i.test(n) ||
+           /APPLE\s+WATCH\s+(SERIES\s+\d+|SE|ULTRA)/i.test(n);
+  }
+
   function isAccessory(nameUpper, container = null) {
     // Check SKU first (highest priority)
     if (container) {
@@ -260,6 +268,12 @@
         return false;
       }
     }
+    
+    // Apple Watch is NOT an accessory - check this before other accessory patterns
+    if (isAppleWatch(nameUpper)) {
+      return false;
+    }
+    
     // Fall back to name-based detection
     return /AIRFLY|ADAPTER|AIRTAG|DONGLE|TRANSMITTER|RECEIVER|CASE|CABLE|CHARGER|MOUNT|STAND|COVER|PROTECTOR|EARBUD|HEADPHONE|TWS|ACCESSORY|ACCESSORIES|SPEAKER|MOUSE|KEYBOARD|SDXC|MICROSD|MEMORY|BAG|BACKPACK/i.test(
       nameUpper
@@ -282,8 +296,10 @@
         // Check if it's an Apple product by name (SKU list doesn't distinguish Apple vs non-Apple)
         // If SKU is in main products, check name to see if it's Apple
         const n = nameUpper.replace(/\s+/g, " ");
+        // Check Apple Watch before accessory hints
+        if (isAppleWatch(n)) return true;
         if (RX_ACCESSORY_HINTS.test(n)) return false;
-        if (/IPHONE|IPAD|MACBOOK|IMAC|MAC\s+MINI|MAC\s+STUDIO|APPLE\s+WATCH|AIRPODS/i.test(n)) {
+        if (/IPHONE|IPAD|MACBOOK|IMAC|MAC\s+MINI|MAC\s+STUDIO|AIRPODS/i.test(n)) {
           return true;
         }
         // If SKU is in main products but name doesn't suggest Apple, it's not Apple
@@ -297,6 +313,10 @@
     
     // Fall back to name-based detection
     const n = nameUpper.replace(/\s+/g, " ");
+    
+    // Check Apple Watch FIRST (before accessory hints, since "WATCH" is in RX_ACCESSORY_HINTS)
+    if (isAppleWatch(n)) return true;
+    
     if (RX_ACCESSORY_HINTS.test(n)) return false;
 
     if (/IPHONE/i.test(n)) {
@@ -313,7 +333,6 @@
     if (/\bIPAD\b/i.test(n)) return true;
     if (/\bMACBOOK\b|\bIMAC\b|\bMAC\s+MINI\b|\bMAC\s+STUDIO\b/i.test(n))
       return true;
-    if (/\bAPPLE WATCH\b/i.test(n)) return true;
     if (/\bAIRPODS\b/i.test(n)) return true;
 
     return false;
