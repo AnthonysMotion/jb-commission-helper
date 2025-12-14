@@ -1045,14 +1045,14 @@
       return;
     }
 
-    // Clean up all existing UI elements before processing new ones
-    // This prevents duplicates when switching between sales
-    $$('.jbh-row-info').forEach(el => el.remove());
-
     const containers = getProductContainers();
-    if (!containers.length) return;
+    if (!containers.length) {
+      // If no containers, remove all UI elements
+      $$('.jbh-row-info').forEach(el => el.remove());
+      return;
+    }
 
-    // Calculate context once
+    // Calculate context once (needed for computeCommission)
     const flags = containers.map((c) => {
       const nU = getProductName(c).toUpperCase();
       const appleCare = isAppleCare(nU);
@@ -1084,6 +1084,26 @@
     if (hasAppleCare && hasPrimary && containers.length > (primaryCount + appleCareCount)) {
         ctx.appleCareSoldWithAppleAndOthers = true;
     }
+
+    // Pre-compute tracking IDs for all current containers to identify orphaned elements
+    // This allows us to preserve matching UI elements while cleaning up stale ones
+    const currentTrackingIds = new Set();
+    containers.forEach((c) => {
+      const result = computeCommission(c, ctx);
+      if (result) {
+        const trackingId = `${result.name}|${result.rate}|${result.value}`;
+        currentTrackingIds.add(trackingId);
+      }
+    });
+
+    // Remove only UI elements that don't match any current container's tracking ID
+    // This preserves matching elements for the optimization check in the loop
+    $$('.jbh-row-info').forEach(el => {
+      const trackingId = el.dataset.trackingId;
+      if (!trackingId || !currentTrackingIds.has(trackingId)) {
+        el.remove();
+      }
+    });
 
     // Inject info
     // We disconnect observer to prevent infinite loops during DOM manipulation
