@@ -85,6 +85,15 @@
     );
   }
 
+  function getSKU(container) {
+    const skuP = $$("p", container).find((p) => text(p).startsWith("SKU:"));
+    if (!skuP) return null;
+    const skuText = text(skuP);
+    // Extract SKU number (format: "SKU: 123456" or "SKU: 123456 (Q)")
+    const m = skuText.match(/SKU:\s*(\d+)/i);
+    return m ? m[1] : null;
+  }
+
   function getStockType(container) {
     const skuP = $$("p", container).find((p) => text(p).startsWith("SKU:"));
     const skuText = text(skuP);
@@ -136,6 +145,65 @@
 
   // --- PRODUCT CATEGORIZATION ---
 
+  // SKU Lists (Highest Priority - checked before name-based detection)
+  // 
+  // HOW TO USE:
+  // 1. Add SKU numbers (as strings) to the appropriate lists below
+  // 2. SKU checks happen FIRST, before any name-based detection
+  // 3. If a SKU is in SKU_MAIN_PRODUCTS, it's treated as a main product
+  // 4. If a SKU is in an attach list, it's treated as an accessory/attach product
+  // 5. Attach products are categorized by what they attach to (iPhone, MacBook, iPad, Camera, or General)
+  //
+  // NOTE: SKU extraction looks for format "SKU: 123456" or "SKU: 123456 (Q)" in the DOM
+  
+  // Main Product SKUs
+  // These SKUs will be treated as primary/main products (not accessories)
+  const SKU_MAIN_PRODUCTS = new Set([
+    // Add main product SKUs here (as strings)
+    // Example: "123456", "789012", "345678"
+  ]);
+
+  // Attach/Accessory SKUs by category
+  // These SKUs will be treated as accessories/attach products
+  // They qualify for multipliers when sold with main products
+  
+  const SKU_ATTACH_IPHONE = new Set([
+    // iPhone accessories/attach products (cases, chargers, etc. for iPhones)
+    // Example: "111111", "222222"
+  ]);
+
+  const SKU_ATTACH_MACBOOK = new Set([
+    // MacBook accessories/attach products (cases, adapters, etc. for MacBooks)
+    // Example: "333333", "444444"
+  ]);
+
+  const SKU_ATTACH_IPAD = new Set([
+    // iPad accessories/attach products (cases, keyboards, etc. for iPads)
+    // Example: "555555", "666666"
+  ]);
+
+  const SKU_ATTACH_CAMERA = new Set([
+    // Camera accessories/attach products (lenses, bags, etc. for cameras)
+    // Example: "777777", "888888"
+  ]);
+
+  const SKU_ATTACH_GENERAL = new Set([
+    // General accessories that attach to any main product
+    // (works with iPhone, MacBook, iPad, Camera, or any other main product)
+    // Example: "999999", "000000"
+  ]);
+
+  // Helper function to check if SKU is in any attach list
+  function getSKUAttachCategory(sku) {
+    if (!sku) return null;
+    if (SKU_ATTACH_IPHONE.has(sku)) return "iphone";
+    if (SKU_ATTACH_MACBOOK.has(sku)) return "macbook";
+    if (SKU_ATTACH_IPAD.has(sku)) return "ipad";
+    if (SKU_ATTACH_CAMERA.has(sku)) return "camera";
+    if (SKU_ATTACH_GENERAL.has(sku)) return "general";
+    return null;
+  }
+
   // Regex for accessories to exclude from main product checks
   const RX_ACCESSORY_HINTS =
     /\b(CASE|COVER|PROTECTOR|SCREEN|GLASS|BUNDLE|PACK|KIT|SLEEVE|FOLIO|SHELL|SKIN|STRAP|BAND|CABLE|CHARGER|ADAPTER|MOUNT|HOLDER|STAND|KEYBOARD|PENCIL|STYLUS|BUDS|WATCH|FIT|EARBUD|HEADPHONE|SPEAKER|MOUSE|AUDIO)\b/i;
@@ -146,7 +214,19 @@
   const RX_CAMERA_EXCLUDE =
     /\b(LENS|BATTERY|CHARGER|CASE|STRAP|MOUNT|SD|MEMORY|HEADPHONE|HEADPHONES|BUDS|EARBUD|SPEAKER|AUDIO)\b/i;
 
-  function isAccessory(nameUpper) {
+  function isAccessory(nameUpper, container = null) {
+    // Check SKU first (highest priority)
+    if (container) {
+      const sku = getSKU(container);
+      if (sku && getSKUAttachCategory(sku)) {
+        return true; // SKU is in an attach list
+      }
+      // If SKU is in main products list, it's NOT an accessory
+      if (sku && SKU_MAIN_PRODUCTS.has(sku)) {
+        return false;
+      }
+    }
+    // Fall back to name-based detection
     return /AIRFLY|ADAPTER|AIRTAG|DONGLE|TRANSMITTER|RECEIVER|CASE|CABLE|CHARGER|MOUNT|STAND|COVER|PROTECTOR|EARBUD|HEADPHONE|TWS|ACCESSORY|ACCESSORIES|SPEAKER|MOUSE|KEYBOARD|SDXC|MICROSD|MEMORY|BAG|BACKPACK/i.test(
       nameUpper
     );
@@ -160,7 +240,28 @@
     return /\bAIRPODS\b/i.test(nameUpper);
   }
 
-  function isAppleProduct(nameUpper) {
+  function isAppleProduct(nameUpper, container = null) {
+    // Check SKU first (highest priority)
+    if (container) {
+      const sku = getSKU(container);
+      if (sku && SKU_MAIN_PRODUCTS.has(sku)) {
+        // Check if it's an Apple product by name (SKU list doesn't distinguish Apple vs non-Apple)
+        // If SKU is in main products, check name to see if it's Apple
+        const n = nameUpper.replace(/\s+/g, " ");
+        if (RX_ACCESSORY_HINTS.test(n)) return false;
+        if (/IPHONE|IPAD|MACBOOK|IMAC|MAC\s+MINI|MAC\s+STUDIO|APPLE\s+WATCH|AIRPODS/i.test(n)) {
+          return true;
+        }
+        // If SKU is in main products but name doesn't suggest Apple, it's not Apple
+        return false;
+      }
+      // If SKU is in attach lists, it's NOT a main Apple product
+      if (sku && getSKUAttachCategory(sku)) {
+        return false;
+      }
+    }
+    
+    // Fall back to name-based detection
     const n = nameUpper.replace(/\s+/g, " ");
     if (RX_ACCESSORY_HINTS.test(n)) return false;
 
@@ -198,7 +299,34 @@
     return RX_CAMERA_BRANDS.test(n) && !RX_CAMERA_EXCLUDE.test(n);
   }
 
-  function isMainNonAppleProduct(nameUpper) {
+  function isMainNonAppleProduct(nameUpper, container = null) {
+    // Check SKU first (highest priority)
+    if (container) {
+      const sku = getSKU(container);
+      if (sku && SKU_MAIN_PRODUCTS.has(sku)) {
+        // Check if it's NOT an Apple product (if it's in main products but not Apple, it's non-Apple main)
+        const n = nameUpper.replace(/\s+/g, " ");
+        if (RX_ACCESSORY_HINTS.test(n)) return false;
+        // If SKU is in main products and name suggests non-Apple, return true
+        if (isSamsungDevice(n)) return true;
+        if (isCamera(n)) return true;
+        if (/\bLENOVO|MICROSOFT\s+SURFACE|HP\s+(VICTUS|OMNIBOOK|PAVILION|SPECTRE|LAPTOP|OMEN)|MSI|ASUS/i.test(n)) {
+          return true;
+        }
+        // If SKU is in main products but name suggests Apple, it's not non-Apple
+        if (/IPHONE|IPAD|MACBOOK|IMAC|MAC\s+MINI|MAC\s+STUDIO|APPLE\s+WATCH|AIRPODS/i.test(n)) {
+          return false;
+        }
+        // If SKU is in main products but we can't determine from name, assume it could be non-Apple
+        // This is a fallback - ideally SKU lists would be more specific
+      }
+      // If SKU is in attach lists, it's NOT a main product
+      if (sku && getSKUAttachCategory(sku)) {
+        return false;
+      }
+    }
+    
+    // Fall back to name-based detection
     const n = nameUpper.replace(/\s+/g, " ");
 
     if (isSamsungDevice(n)) return true;
@@ -247,8 +375,8 @@
     const appleCareItem = isAppleCare(nameU);
     
     const isItemAirPods = isAirPods(nameU);
-    let appleItem = isAppleProduct(nameU) && !appleCareItem;
-    let accessoryItem = isAccessory(nameU);
+    let appleItem = isAppleProduct(nameU, container) && !appleCareItem;
+    let accessoryItem = isAccessory(nameU, container);
 
     // Dynamic AirPods logic:
     // If AirPods, and there is a "Real" Primary Product (iPhone, Mac, etc.) -> Treat as Accessory.
@@ -302,7 +430,7 @@
 
     // 2. Q Stock Logic
     if (stockType === "Q") {
-      const isMain = appleItem || isMainNonAppleProduct(nameU);
+      const isMain = appleItem || isMainNonAppleProduct(nameU, container);
       const noteSuffix = isMain 
         ? ". Considering this as primary product for any attached items (IPS Multiplier)" 
         : "";
@@ -330,7 +458,7 @@
     }
 
     // 3. Primary Products Logic (Phones, Tablets, Cameras, Computers)
-    if (appleItem || isMainNonAppleProduct(nameU)) {
+    if (appleItem || isMainNonAppleProduct(nameU, container)) {
       // Rule: Any Primary Product sold by itself = 0.2%
       // Special handling for AirPods: ensure solo AirPods gets 0.2%
       // Use both isItemAirPods check and direct name check for robustness
@@ -677,7 +805,7 @@
       
       // Pre-calculate context for dynamic AirPods
       const _isAirPods = isAirPods(nU);
-      const _isPrimary = isAppleProduct(nU) || isMainNonAppleProduct(nU);
+      const _isPrimary = isAppleProduct(nU, c) || isMainNonAppleProduct(nU, c);
       const _isRealPrimary = _isPrimary && !_isAirPods;
 
       return { appleCare, _isAirPods, _isRealPrimary, _isPrimary };
@@ -771,7 +899,7 @@
       // Determine if this specific item is acting as Main Product
       // We use the same logic as computeCommission to check
       const _isAirPods = isAirPods(nU);
-      let _isPrimary = isAppleProduct(nU) || isMainNonAppleProduct(nU);
+      let _isPrimary = isAppleProduct(nU, c) || isMainNonAppleProduct(nU, c);
       if (_isAirPods && ctx.hasRealPrimaryProduct) _isPrimary = false;
 
       if (
@@ -929,7 +1057,7 @@
       const nU = getProductName(c).toUpperCase();
       const appleCare = isAppleCare(nU);
       const _isAirPods = isAirPods(nU);
-      const _isPrimary = isAppleProduct(nU) || isMainNonAppleProduct(nU);
+      const _isPrimary = isAppleProduct(nU, c) || isMainNonAppleProduct(nU, c);
       const _isRealPrimary = _isPrimary && !_isAirPods;
       return { appleCare, _isAirPods, _isRealPrimary, _isPrimary };
     });
@@ -990,10 +1118,11 @@
             const stockStr = getStockType(c) === "Q" ? "Q Stock" : "Regular Stock";
             
             let category = "Unknown";
-            if (isAppleProduct(result.name)) category = "Apple Primary";
-            else if (isMainNonAppleProduct(result.name)) category = "Primary (Non-Apple)";
-            else if (isAccessory(result.name)) category = "Accessory";
-            else if (isBigElectronicDevice(result.name)) category = "Big Device";
+            const resultNameU = (result.name || "").toUpperCase();
+            if (isAppleProduct(resultNameU, c)) category = "Apple Primary";
+            else if (isMainNonAppleProduct(resultNameU, c)) category = "Primary (Non-Apple)";
+            else if (isAccessory(resultNameU, c)) category = "Accessory";
+            else if (isBigElectronicDevice(resultNameU)) category = "Big Device";
             
             let bundleStatus = "None";
             if (ctx.appleCareSoldWithAppleAndOthers && result.multiplier === 2.5) bundleStatus = "AC Multiplier (2.5x)";
