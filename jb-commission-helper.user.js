@@ -1362,18 +1362,168 @@
             z-index: 2147483647;
             display: flex;
             flex-direction: column;
-            gap: 12px;
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
             background: rgba(20, 20, 20, 0.95);
             backdrop-filter: blur(10px);
-            padding: 16px;
             border-radius: 16px;
             border: 1px solid rgba(255, 255, 255, 0.1);
             box-shadow: 0 12px 32px rgba(0, 0, 0, 0.4);
-            width: 220px;
             color: white;
             opacity: 0;
             animation: jbh-fade-in 0.4s ease forwards;
+            min-width: 200px;
+            min-height: 150px;
+            max-width: 90vw;
+            max-height: 90vh;
+            overflow: hidden;
+            user-select: none;
+        }
+
+        #jbh-helper-wrap.dragging {
+            cursor: grabbing !important;
+            box-shadow: 0 16px 40px rgba(0, 0, 0, 0.5);
+        }
+
+        #jbh-helper-wrap.resizing {
+            cursor: nwse-resize !important;
+        }
+
+        .jbh-drag-handle {
+            padding: 12px 16px;
+            cursor: grab;
+            background: rgba(255, 255, 255, 0.05);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            flex-shrink: 0;
+        }
+
+        .jbh-drag-handle:active {
+            cursor: grabbing;
+        }
+
+        .jbh-drag-handle:hover {
+            background: rgba(255, 255, 255, 0.08);
+        }
+
+        .jbh-content {
+            padding: 16px;
+            display: flex;
+            flex-direction: column;
+            flex: 1;
+            min-height: 0;
+            overflow: hidden;
+        }
+
+        .jbh-content-scrollable {
+            flex: 1;
+            overflow-y: auto;
+            overflow-x: hidden;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            min-height: 0;
+            padding-right: 4px;
+        }
+
+        .jbh-content-scrollable::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        .jbh-content-scrollable::-webkit-scrollbar-track {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 3px;
+        }
+
+        .jbh-content-scrollable::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 3px;
+        }
+
+        .jbh-content-scrollable::-webkit-scrollbar-thumb:hover {
+            background: rgba(255, 255, 255, 0.3);
+        }
+
+        .jbh-button-container {
+            margin-top: 12px;
+            flex-shrink: 0;
+            padding-top: 12px;
+            border-top: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .jbh-resize-handle {
+            position: absolute;
+            background: transparent;
+            z-index: 10;
+        }
+
+        .jbh-resize-handle.n {
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 8px;
+            cursor: ns-resize;
+        }
+
+        .jbh-resize-handle.s {
+            bottom: 0;
+            left: 0;
+            right: 0;
+            height: 8px;
+            cursor: ns-resize;
+        }
+
+        .jbh-resize-handle.e {
+            top: 0;
+            right: 0;
+            bottom: 0;
+            width: 8px;
+            cursor: ew-resize;
+        }
+
+        .jbh-resize-handle.w {
+            top: 0;
+            left: 0;
+            bottom: 0;
+            width: 8px;
+            cursor: ew-resize;
+        }
+
+        .jbh-resize-handle.ne {
+            top: 0;
+            right: 0;
+            width: 16px;
+            height: 16px;
+            cursor: nesw-resize;
+        }
+
+        .jbh-resize-handle.nw {
+            top: 0;
+            left: 0;
+            width: 16px;
+            height: 16px;
+            cursor: nwse-resize;
+        }
+
+        .jbh-resize-handle.se {
+            bottom: 0;
+            right: 0;
+            width: 16px;
+            height: 16px;
+            cursor: nwse-resize;
+        }
+
+        .jbh-resize-handle.sw {
+            bottom: 0;
+            left: 0;
+            width: 16px;
+            height: 16px;
+            cursor: nesw-resize;
+        }
+
+        .jbh-resize-handle:hover {
+            background: rgba(52, 199, 89, 0.2);
         }
 
         @keyframes jbh-fade-in {
@@ -1387,7 +1537,24 @@
             text-transform: uppercase;
             letter-spacing: 0.5px;
             color: #888;
-            margin-bottom: 4px;
+            flex: 1;
+        }
+
+        .jbh-drag-icon {
+            width: 16px;
+            height: 16px;
+            opacity: 0.5;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+        }
+
+        .jbh-drag-icon::before {
+            content: '⋮⋮';
+            font-size: 12px;
+            line-height: 1;
+            color: #888;
         }
 
         .jbh-row {
@@ -1397,6 +1564,17 @@
             font-size: 14px;
             font-weight: 500;
             cursor: pointer;
+            gap: 12px;
+            min-height: 32px;
+            flex-shrink: 0;
+        }
+
+        .jbh-row span {
+            flex: 1;
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
         }
 
         /* SWITCH */
@@ -1431,7 +1609,6 @@
 
         /* BUTTON */
         #jbh-auto-btn {
-            margin-top: 8px;
             width: 100%;
             padding: 12px 0;
             border-radius: 10px;
@@ -1449,6 +1626,10 @@
         }
         #jbh-auto-btn:active {
             transform: scale(0.96);
+        }
+        #jbh-auto-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
         }
 
         /* NOTIFICATIONS & TOASTS */
@@ -1520,24 +1701,50 @@
     const wrap = document.createElement("div");
     wrap.id = "jbh-helper-wrap";
 
+    // Load saved position and size
+    const savedPos = localStorage.getItem("jbh-wrap-position");
+    const savedSize = localStorage.getItem("jbh-wrap-size");
+    if (savedPos) {
+      const pos = JSON.parse(savedPos);
+      wrap.style.left = pos.left;
+      wrap.style.top = pos.top;
+      wrap.style.right = "auto";
+      wrap.style.bottom = "auto";
+    }
+    if (savedSize) {
+      const size = JSON.parse(savedSize);
+      wrap.style.width = size.width;
+      wrap.style.height = size.height;
+    } else {
+      wrap.style.width = "220px";
+    }
+
     // Shared Tooltip Element
     const tooltip = document.createElement("div");
     tooltip.id = "jbh-tooltip";
     wrap.appendChild(tooltip);
 
+    // Drag Handle
+    const dragHandle = document.createElement("div");
+    dragHandle.className = "jbh-drag-handle";
     const title = document.createElement("div");
     title.className = "jbh-title";
     title.textContent = "COMMISSION HELPER";
-    wrap.appendChild(title);
+    const dragIcon = document.createElement("div");
+    dragIcon.className = "jbh-drag-icon";
+    dragHandle.appendChild(title);
+    dragHandle.appendChild(dragIcon);
+    wrap.appendChild(dragHandle);
+
+    // Content Container
+    const content = document.createElement("div");
+    content.className = "jbh-content";
+    wrap.appendChild(content);
 
     // Helper to create toggle row
     const createToggle = (key, labelText, tooltipText) => {
         const label = document.createElement("label");
         label.className = "jbh-row";
-        // Relative positioning for tooltip context if needed, 
-        // but we are using absolute on the shared tooltip relative to the label? 
-        // Actually, 'wrap' is fixed. If we put tooltip inside 'label', overflow might be an issue.
-        // Let's keep tooltip in 'wrap' and move it.
         label.style.position = "relative"; 
         
         const span = document.createElement("span");
@@ -1575,15 +1782,184 @@
         return label;
     };
 
-    wrap.appendChild(createToggle(LS_KEY_ONLY_ZERO, "Edit $0 Only", "Only adjust items with $0 commission. \n\nUseful for fixing missed commissions without overwriting the existing commission values."));
-    wrap.appendChild(createToggle(LS_KEY_CALC, "Add Calc", "Add the math formula used to the reason/comment field. \n\n(e.g., 0.5% * $1000 = $5.00)"));
-    wrap.appendChild(createToggle(LS_KEY_REASON, "Add Reason", "Add the explanation note to the reason/comment field. \n\n(e.g., 'IPS Multiplier', 'Main Product with attach/AC')"));
+    // Scrollable content area for toggles
+    const scrollableContent = document.createElement("div");
+    scrollableContent.className = "jbh-content-scrollable";
+    
+    scrollableContent.appendChild(createToggle(LS_KEY_ONLY_ZERO, "Edit $0 Only", "Only adjust items with $0 commission. \n\nUseful for fixing missed commissions without overwriting the existing commission values."));
+    scrollableContent.appendChild(createToggle(LS_KEY_CALC, "Add Formula/Calculation", "Add the math formula used to the reason/comment field. \n\n(e.g., 0.5% * $1000 = $5.00)"));
+    scrollableContent.appendChild(createToggle(LS_KEY_REASON, "Add Reason", "Add the explanation note to the reason/comment field. \n\n(e.g., 'IPS Multiplier', 'Main Product with attach/AC')"));
+    
+    content.appendChild(scrollableContent);
 
+    // Button container that sticks to bottom
+    const buttonContainer = document.createElement("div");
+    buttonContainer.className = "jbh-button-container";
     const btn = document.createElement("button");
     btn.id = "jbh-auto-btn";
     btn.textContent = "Run Adjustment";
     btn.addEventListener("click", autoFixZeros);
-    wrap.appendChild(btn);
+    buttonContainer.appendChild(btn);
+    content.appendChild(buttonContainer);
+
+    // Add resize handles
+    const resizeHandles = ['n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw'];
+    resizeHandles.forEach(direction => {
+      const handle = document.createElement("div");
+      handle.className = `jbh-resize-handle ${direction}`;
+      wrap.appendChild(handle);
+    });
+
+    // Drag functionality
+    let isDragging = false;
+    let dragStartX = 0;
+    let dragStartY = 0;
+    let initialLeft = 0;
+    let initialTop = 0;
+
+    dragHandle.addEventListener("mousedown", (e) => {
+      if (e.target.closest('.jbh-resize-handle')) return;
+      isDragging = true;
+      wrap.classList.add("dragging");
+      dragStartX = e.clientX;
+      dragStartY = e.clientY;
+      const rect = wrap.getBoundingClientRect();
+      initialLeft = rect.left;
+      initialTop = rect.top;
+      e.preventDefault();
+    });
+
+    document.addEventListener("mousemove", (e) => {
+      if (isDragging) {
+        const deltaX = e.clientX - dragStartX;
+        const deltaY = e.clientY - dragStartY;
+        const newLeft = initialLeft + deltaX;
+        const newTop = initialTop + deltaY;
+        
+        // Keep within viewport bounds
+        const maxLeft = window.innerWidth - wrap.offsetWidth;
+        const maxTop = window.innerHeight - wrap.offsetHeight;
+        
+        wrap.style.left = `${Math.max(0, Math.min(newLeft, maxLeft))}px`;
+        wrap.style.top = `${Math.max(0, Math.min(newTop, maxTop))}px`;
+        wrap.style.right = "auto";
+        wrap.style.bottom = "auto";
+      }
+    });
+
+    document.addEventListener("mouseup", () => {
+      if (isDragging) {
+        isDragging = false;
+        wrap.classList.remove("dragging");
+        // Save position
+        const rect = wrap.getBoundingClientRect();
+        localStorage.setItem("jbh-wrap-position", JSON.stringify({
+          left: `${rect.left}px`,
+          top: `${rect.top}px`
+        }));
+      }
+    });
+
+    // Resize functionality
+    let isResizing = false;
+    let resizeDirection = "";
+    let resizeStartX = 0;
+    let resizeStartY = 0;
+    let initialWidth = 0;
+    let initialHeight = 0;
+    let initialLeftResize = 0;
+    let initialTopResize = 0;
+
+    resizeHandles.forEach(direction => {
+      const handle = wrap.querySelector(`.jbh-resize-handle.${direction}`);
+      handle.addEventListener("mousedown", (e) => {
+        isResizing = true;
+        resizeDirection = direction;
+        wrap.classList.add("resizing");
+        resizeStartX = e.clientX;
+        resizeStartY = e.clientY;
+        const rect = wrap.getBoundingClientRect();
+        initialWidth = rect.width;
+        initialHeight = rect.height;
+        initialLeftResize = rect.left;
+        initialTopResize = rect.top;
+        e.preventDefault();
+        e.stopPropagation();
+      });
+    });
+
+    document.addEventListener("mousemove", (e) => {
+      if (isResizing) {
+        const deltaX = e.clientX - resizeStartX;
+        const deltaY = e.clientY - resizeStartY;
+        let newWidth = initialWidth;
+        let newHeight = initialHeight;
+        let newLeft = initialLeftResize;
+        let newTop = initialTopResize;
+
+        if (resizeDirection.includes('e')) {
+          newWidth = initialWidth + deltaX;
+        }
+        if (resizeDirection.includes('w')) {
+          newWidth = initialWidth - deltaX;
+          newLeft = initialLeftResize + deltaX;
+        }
+        if (resizeDirection.includes('s')) {
+          newHeight = initialHeight + deltaY;
+        }
+        if (resizeDirection.includes('n')) {
+          newHeight = initialHeight - deltaY;
+          newTop = initialTopResize + deltaY;
+        }
+
+        // Apply constraints
+        const minWidth = 200;
+        const minHeight = 150;
+        const maxWidth = window.innerWidth;
+        const maxHeight = window.innerHeight;
+
+        newWidth = Math.max(minWidth, Math.min(newWidth, maxWidth));
+        newHeight = Math.max(minHeight, Math.min(newHeight, maxHeight));
+
+        // Adjust position if resizing from left or top
+        if (resizeDirection.includes('w')) {
+          const widthDelta = newWidth - initialWidth;
+          const adjustedLeft = initialLeftResize - widthDelta;
+          if (adjustedLeft >= 0 && adjustedLeft + newWidth <= window.innerWidth) {
+            wrap.style.left = `${adjustedLeft}px`;
+            wrap.style.right = "auto";
+          } else {
+            newWidth = initialWidth;
+          }
+        }
+        if (resizeDirection.includes('n')) {
+          const heightDelta = newHeight - initialHeight;
+          const adjustedTop = initialTopResize - heightDelta;
+          if (adjustedTop >= 0 && adjustedTop + newHeight <= window.innerHeight) {
+            wrap.style.top = `${adjustedTop}px`;
+            wrap.style.bottom = "auto";
+          } else {
+            newHeight = initialHeight;
+          }
+        }
+
+        wrap.style.width = `${newWidth}px`;
+        wrap.style.height = `${newHeight}px`;
+      }
+    });
+
+    document.addEventListener("mouseup", () => {
+      if (isResizing) {
+        isResizing = false;
+        wrap.classList.remove("resizing");
+        // Save size
+        const rect = wrap.getBoundingClientRect();
+        localStorage.setItem("jbh-wrap-size", JSON.stringify({
+          width: `${rect.width}px`,
+          height: `${rect.height}px`
+        }));
+      }
+    });
 
     document.body.appendChild(wrap);
     updateUIState();
