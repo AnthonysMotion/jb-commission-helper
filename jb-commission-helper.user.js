@@ -243,7 +243,7 @@
     /\b(CASE|COVER|PROTECTOR|SCREEN|GLASS|BUNDLE|PACK|KIT|SLEEVE|FOLIO|SHELL|SKIN|STRAP|BAND|CABLE|CHARGER|ADAPTER|MOUNT|HOLDER|STAND|KEYBOARD|PENCIL|STYLUS|BUDS|WATCH|FIT|EARBUD|HEADPHONE|SPEAKER|MOUSE|AUDIO)\b/i;
 
   const RX_CAMERA_BRANDS =
-    /\b(CANON|SONY A|SONY ALPHA|NIKON|FUJIFILM|PANASONIC|INSTAX|POLAROID|GOPRO|DJI)\b/i;
+    /\b(CANON|SONY A|SONY ALPHA|NIKON|PANASONIC|INSTAX|POLAROID|GOPRO|DJI)\b/i;
 
   const RX_CAMERA_EXCLUDE =
     /\b(LENS|BATTERY|CHARGER|CASE|STRAP|MOUNT|SD|MEMORY|HEADPHONE|HEADPHONES|BUDS|EARBUD|SPEAKER|AUDIO)\b/i;
@@ -1222,8 +1222,8 @@
                 boxShadow: "0 12px 32px rgba(0, 0, 0, 0.4)",
                 fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif',
                 position: "absolute",
-                top: "10px",
-                right: "10px",
+                bottom: "10px",
+                left: "10px",
                 zIndex: "100"
             });
 
@@ -1232,6 +1232,7 @@
 
             // Top Section: Auto Suggestion
             const topSection = document.createElement("div");
+            topSection.className = "jbh-auto-section";
             topSection.innerHTML = `
                 <div style="text-align:center; font-weight:700; color:#fff; font-size:14px; margin-bottom:8px; padding-bottom:8px; border-bottom:1px solid rgba(255,255,255,0.1); letter-spacing: 0.3px;">
                     Automatic Adjustment: <span style="color:#34C759;">${fmtPercent(result.rate)}%</span> - <span style="color:#34C759;">$${dispValue}</span>
@@ -1245,6 +1246,7 @@
 
             // Bottom Section: Manual Controls
             const bottomSection = document.createElement("div");
+            bottomSection.className = "jbh-manual-section";
             Object.assign(bottomSection.style, {
                 marginTop: "4px",
                 paddingTop: "8px",
@@ -1317,17 +1319,17 @@
             bottomSection.appendChild(btnRow);
             infoDiv.appendChild(bottomSection);
 
-            // Injection Point: Top Right of Product Box
+            // Injection Point: Bottom Left of Product Box
             // card is already defined above
             if (card) {
                 const style = window.getComputedStyle(card);
                 if (style.position === 'static') card.style.position = 'relative';
                 
-                // Adjust infoDiv style for absolute positioning
+                // Adjust infoDiv style for absolute positioning at bottom left
                 Object.assign(infoDiv.style, {
                    position: "absolute",
-                   top: "40px",
-                   right: "10px",
+                   bottom: "10px",
+                   left: "10px",
                    zIndex: "100"
                 });
 
@@ -1618,18 +1620,65 @@
             font-size: 15px;
             font-weight: 700;
             cursor: pointer;
-            transition: transform 0.1s, background 0.2s, box-shadow 0.2s;
+            transition: background 0.3s ease, color 0.3s ease, transform 0.2s ease, box-shadow 0.3s ease;
+            transform: translateY(0);
         }
+
         #jbh-auto-btn:hover {
-            background: #f0f0f0;
-            box-shadow: 0 4px 12px rgba(255,255,255,0.15);
+            background: #34C759;
+            color: white;
+            box-shadow: 0 4px 12px rgba(52, 199, 89, 0.3);
+            transform: translateY(-2px);
         }
+
         #jbh-auto-btn:active {
-            transform: scale(0.96);
+            transform: translateY(0);
+            box-shadow: 0 2px 6px rgba(52, 199, 89, 0.2);
+            transition: all 0.1s;
         }
+
         #jbh-auto-btn:disabled {
             opacity: 0.5;
             cursor: not-allowed;
+            transform: none;
+        }
+
+        #jbh-auto-btn:disabled:hover {
+            transform: none;
+            box-shadow: none;
+            background: white;
+            color: black;
+        }
+
+        /* ROW INFO HOVER EFFECTS */
+        .jbh-row-info {
+            transition: opacity 0.3s ease, background 0.3s ease;
+        }
+
+        .jbh-row-info .jbh-auto-section {
+            transition: opacity 0.3s ease;
+            opacity: 1;
+        }
+
+        /* When hovering auto section, fade entire widget including background */
+        .jbh-row-info:has(.jbh-auto-section:hover) {
+            opacity: 0.2;
+        }
+
+        /* Keep manual section fully visible even when widget is faded */
+        .jbh-row-info:has(.jbh-auto-section:hover) .jbh-manual-section {
+            opacity: 1;
+            pointer-events: auto;
+        }
+
+        .jbh-row-info .jbh-manual-section {
+            opacity: 1;
+            pointer-events: auto;
+        }
+
+        /* When hovering manual section, keep widget at full opacity */
+        .jbh-row-info:has(.jbh-manual-section:hover) {
+            opacity: 1;
         }
 
         /* NOTIFICATIONS & TOASTS */
@@ -1786,7 +1835,7 @@
     const scrollableContent = document.createElement("div");
     scrollableContent.className = "jbh-content-scrollable";
     
-    scrollableContent.appendChild(createToggle(LS_KEY_ONLY_ZERO, "Edit $0 Only", "Only adjust items with $0 commission. \n\nUseful for fixing missed commissions without overwriting the existing commission values."));
+    scrollableContent.appendChild(createToggle(LS_KEY_ONLY_ZERO, "Edit $0 Commissions Only", "Only adjust items with $0 commission. \n\nUseful for fixing missed commissions without overwriting the existing commission values."));
     scrollableContent.appendChild(createToggle(LS_KEY_CALC, "Add Formula/Calculation", "Add the math formula used to the reason/comment field. \n\n(e.g., 0.5% * $1000 = $5.00)"));
     scrollableContent.appendChild(createToggle(LS_KEY_REASON, "Add Reason", "Add the explanation note to the reason/comment field. \n\n(e.g., 'IPS Multiplier', 'Main Product with attach/AC')"));
     
