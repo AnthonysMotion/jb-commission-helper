@@ -146,21 +146,6 @@
   // --- PRODUCT CATEGORIZATION ---
 
   // SKU Lists (Highest Priority - checked before name-based detection)
-  // 
-  // HOW TO USE:
-  // 1. Add SKU numbers (as strings) to the appropriate lists below
-  // 2. SKU checks happen FIRST, before any name-based detection
-  // 3. If a SKU is in SKU_MAIN_PRODUCTS, it's treated as a main product
-  // 4. If a SKU is in an attach list, it's treated as an accessory/attach product
-  // 5. Attach products are categorized by what they attach to (iPhone, MacBook, iPad, Camera, or General)
-  //
-  // NOTE: SKU extraction looks for format "SKU: 123456" or "SKU: 123456 (Q)" in the DOM
-  
-  // Main Product SKUs
-  // These SKUs will be treated as primary/main products (not accessories)
-  // 
-  // To find SKUs: Visit each product page on jbhifi.co.nz and look for "SKU: XXXXXX" on the page
-  // MacBook product listing: https://www.jbhifi.co.nz/collections/computers-tablets/apple-macbooks
   const SKU_MAIN_PRODUCTS = new Set([
     // MacBook Pro SKUs
     "465729", // MacBook Pro 14" M5 512GB/16GB Space Black
@@ -199,32 +184,19 @@
   ]);
 
   // Attach/Accessory SKUs by category
-  // These SKUs will be treated as accessories/attach products
-  // They qualify for multipliers when sold with main products
-  
   const SKU_ATTACH_IPHONE = new Set([
-    // iPhone accessories/attach products (cases, chargers, etc. for iPhones)
-    // Example: "111111", "222222"
   ]);
 
   const SKU_ATTACH_MACBOOK = new Set([
-
   ]);
 
   const SKU_ATTACH_IPAD = new Set([
-    // iPad accessories/attach products (cases, keyboards, etc. for iPads)
-    // Example: "555555", "666666"
   ]);
 
   const SKU_ATTACH_CAMERA = new Set([
-    // Camera accessories/attach products (lenses, bags, etc. for cameras)
-    // Example: "777777", "888888"
   ]);
 
   const SKU_ATTACH_GENERAL = new Set([
-    // General accessories that attach to any main product
-    // (works with iPhone, MacBook, iPad, Camera, or any other main product)
-    // Example: "999999", "000000"
   ]);
 
   // Helper function to check if SKU is in any attach list
@@ -1071,11 +1043,8 @@
         commentText = noteOverride;
     } else {
         // If using preset rate without explicit note, generate standard text
-        // We can use buildWorkingText but we need a 'computed' object
-        // Let's just use a simple format for manual clicks
         const pct = fmtPercent(rate) + "%";
         if (calcOn) {
-             // Use val directly to show up to 3 decimals (no toFixed(2) rounding)
              commentText = `${pct} of $${saleTotal} = $${val}`;
         } else {
              commentText = pct;
@@ -1101,9 +1070,6 @@
   }
 
   // --- INJECT INFO UI ---
-  // Removed WeakSet to allow updates on DOM reuse
-  // const processedContainers = new WeakSet();
-
   function injectRowInfo() {
     // Only run on Overview page
     const headers = Array.from(document.querySelectorAll("h2"));
@@ -1179,16 +1145,10 @@
 
     try {
         containers.forEach((c) => {
-            // REMOVED processedContainers check to allow updates on reused DOM elements
-
             const result = computeCommission(c, ctx);
             if (!result) return;
 
-            // Identify the parent card (jss70 equivalent)
             const card = c.parentElement || c;
-
-            // Create a unique ID for the state of this product
-            // If product name or value changes (DOM reuse), this ID will change
             const trackingId = `${result.name}|${result.rate}|${result.value}`;
 
             // Check for existing UI in the card (not in c)
@@ -1900,7 +1860,6 @@
     buttonContainer.appendChild(btn);
     content.appendChild(buttonContainer);
 
-    // Add resize handles
     const resizeHandles = ['n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw'];
     resizeHandles.forEach(direction => {
       const handle = document.createElement("div");
