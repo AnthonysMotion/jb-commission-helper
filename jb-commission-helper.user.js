@@ -21,7 +21,12 @@
 
   function parseMoney(txt) {
     if (!txt) return 0;
-    return Number(txt.replace(/[^0-9.]/g, ""));
+    // Preserve negative sign for refunds
+    // Handle both "-" prefix and accounting format with parentheses like "(100.00)"
+    const isNegative = txt.includes("-") || (txt.includes("(") && txt.includes(")"));
+    const cleaned = txt.replace(/[^0-9.]/g, "");
+    const num = Number(cleaned);
+    return isNegative ? -Math.abs(num) : num;
   }
 
   function text(el) {
@@ -1238,13 +1243,18 @@
 
             // Calculate truncated value for display to match actual behavior
             const dispValue = trunc3(result.value);
+            // Format value: move negative sign before $ if refunded
+            const formattedValue = dispValue < 0 ? `-$${Math.abs(dispValue)}` : `$${dispValue}`;
+            // Use red color for negative values (refunds), green for positive
+            const valueColor = dispValue < 0 ? "#FF3B30" : "#34C759";
 
             // Top Section: Auto Suggestion
             const topSection = document.createElement("div");
             topSection.className = "jbh-auto-section";
             topSection.innerHTML = `
                 <div style="text-align:center; font-weight:700; color:#fff; font-size:14px; margin-bottom:8px; padding-bottom:8px; border-bottom:1px solid rgba(255,255,255,0.1); letter-spacing: 0.3px;">
-                    Automatic Adjustment: <span style="color:#34C759;">${fmtPercent(result.rate)}%</span> - <span style="color:#34C759;">$${dispValue}</span>
+                    <div>Automatic Adjustment:</div>
+                    <div><span style="color:${valueColor};">${fmtPercent(result.rate)}%</span> <span style="color:#fff;">=</span> <span style="color:${valueColor};">${formattedValue}</span></div>
                 </div>
                 <div style="display:flex; flex-direction:column; align-items:center; gap:4px; font-size:12px; color:#aaa;">
                     <span>${category} • ${stockStr}</span>
