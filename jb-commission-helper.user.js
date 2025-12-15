@@ -2,7 +2,7 @@
 // ==UserScript==
 // @name         JB Commission Helper
 // @namespace    jb-commission-helper
-// @version      7.4
+// @version      8.1
 // @description  automatically does ur jb commmissions for u :) anthonythach.com
 // @match        https://jbh-all-commissions-ui-webapp-prod.azurewebsites.net/*
 // @run-at       document-idle
@@ -120,7 +120,7 @@
       let score = c.length;
       const upper = c.toUpperCase();
       if (
-        /IPHONE|MACBOOK|IMAC|MAC|IPAD|WATCH|SURFACE|LAPTOP|GALAXY|TABLET/i.test(
+        /IPHONE|2D SAMSUNG|MACBOOK|IMAC|MAC|IPAD|WATCH|SURFACE|LAPTOP|GALAXY|TABLET/i.test(
           upper
         )
       )
@@ -241,6 +241,16 @@
       }
     }
     
+    // Products starting with "3SIXT - " are accessories
+    if (/^3SIXT\s*-\s*/i.test(nameUpper)) {
+      return true;
+    }
+    
+    // Products starting with "PANZERGLASS-" are accessories
+    if (/^PANZERGLASS\s*-/i.test(nameUpper)) {
+      return true;
+    }
+    
     // Apple Watch is NOT an accessory - check this before other accessory patterns
     if (isAppleWatch(nameUpper)) {
       return false;
@@ -257,6 +267,11 @@
   }
 
   function isAirPods(nameUpper) {
+    // Specifically match AirPods Pro 3, Pro 2, and AirPods 4
+    if (/AIRPODS\s+PRO\s+3|AIRPODS\s+PRO\s+2|AIRPODS\s+4/i.test(nameUpper)) {
+      return true;
+    }
+    // Also catch other AirPods variants
     return /\bAIRPODS\b/i.test(nameUpper);
   }
 
@@ -313,6 +328,14 @@
   function isSamsungDevice(nameUpper) {
     const n = nameUpper.replace(/\s+/g, " ");
     if (!/\bSAMSUNG\b/i.test(n)) return false;
+    
+    // Check for S25 series (S25, S25+, S25 Ultra, S25 Pro, etc.) - these don't have "GALAXY" in the name
+    if (/\bS25[\s\+]?\+?[\s]?(ULTRA|PRO)?/i.test(n)) {
+      if (RX_ACCESSORY_HINTS.test(n)) return false;
+      return true;
+    }
+    
+    // Check for Galaxy devices (requires both SAMSUNG and GALAXY)
     if (!/\bGALAXY\b/i.test(n)) return false;
     if (RX_ACCESSORY_HINTS.test(n)) return false;
     if (/\bBOOK\b/i.test(n)) return false; // Exclude Galaxy Book (Laptops handled in general logic)
@@ -404,15 +427,17 @@
     let accessoryItem = isAccessory(nameU, container);
 
     // Dynamic AirPods logic:
-    // If AirPods, and there is a "Real" Primary Product (iPhone, Mac, etc.) -> Treat as Accessory.
-    // Else -> Treat as Primary (Apple Product).
+    // - AirPods sold alone (saleItemCount === 1) = 0.2% (treated as main product)
+    // - AirPods sold with other items (saleItemCount > 1) = 0.5% (treated as accessory, regardless of what it's sold with)
     if (isItemAirPods) {
-      if (ctx.hasRealPrimaryProduct) {
-        appleItem = false;
-        accessoryItem = true;
-      } else {
+      if (ctx.saleItemCount === 1) {
+        // AirPods sold alone = main product (0.2%)
         appleItem = true;
         accessoryItem = false;
+      } else {
+        // AirPods sold with other items = accessory (0.5%)
+        appleItem = false;
+        accessoryItem = true;
       }
     } else if (appleItem) {
       // Ensure normal Apple products don't accidentally flag as accessories via overlapping keywords
@@ -1167,7 +1192,16 @@
             
             let category = "Unknown";
             const resultNameU = (result.name || "").toUpperCase();
-            if (isAppleProduct(resultNameU, c)) category = "Apple Primary";
+            if (/2D\s+SAMSUNG|SAMSUNG\s+GALAXY\s+S|SAMSUNG\s+S25/i.test(resultNameU) || isSamsungDevice(resultNameU)) {
+                category = "Samsung Main Product";
+            } else if (isAirPods(resultNameU)) {
+                // AirPods Pro 3, Pro 2, and AirPods 4: "Apple Primary" if alone, "Accessory" if attached to iPhone/MacBook
+                if (ctx.hasRealPrimaryProduct) {
+                    category = "Accessory";
+                } else {
+                    category = "Apple Primary";
+                }
+            } else if (isAppleProduct(resultNameU, c)) category = "Apple Primary";
             else if (isMainNonAppleProduct(resultNameU, c)) category = "Primary (Non-Apple)";
             else if (isAccessory(resultNameU, c)) category = "Accessory";
             else if (isBigElectronicDevice(resultNameU)) category = "Big Device";
