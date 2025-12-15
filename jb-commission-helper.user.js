@@ -840,17 +840,25 @@
   }
 
   async function autoFixZeros() {
-    for (let i = 0; i < 30; i++) {
-      if (getProductContainers().length) break;
-      await sleep(150);
+    // Set button to processing state
+    const runBtn = document.getElementById("jbh-auto-btn");
+    if (runBtn) {
+      runBtn.classList.add("processing");
+      runBtn.disabled = true;
     }
 
-    const containers = getProductContainers();
+    try {
+      for (let i = 0; i < 30; i++) {
+        if (getProductContainers().length) break;
+        await sleep(150);
+      }
 
-    if (!containers.length) {
-      notify("No items found in this sale.");
-      return;
-    }
+      const containers = getProductContainers();
+
+      if (!containers.length) {
+        notify("No items found in this sale.");
+        return;
+      }
 
     const flags = containers.map((c) => {
       const nU = getProductName(c).toUpperCase();
@@ -1005,6 +1013,13 @@
     }
 
     notify("Done ✅");
+    } finally {
+      // Remove processing state
+      if (runBtn) {
+        runBtn.classList.remove("processing");
+        runBtn.disabled = false;
+      }
+    }
   }
 
   function updateUIState() {
@@ -1620,27 +1635,56 @@
             font-size: 15px;
             font-weight: 700;
             cursor: pointer;
-            transition: background 0.3s ease, color 0.3s ease, transform 0.2s ease, box-shadow 0.3s ease;
+            transition: background 0.3s ease, color 0.3s ease, transform 0.2s ease, box-shadow 0.3s ease, border-color 0.3s ease;
             transform: translateY(0);
+            border: 2px solid transparent;
         }
 
         #jbh-auto-btn:hover {
             background: #34C759;
             color: white;
+            border-color: #34C759;
             box-shadow: 0 4px 12px rgba(52, 199, 89, 0.3);
             transform: translateY(-2px);
         }
 
         #jbh-auto-btn:active {
+            background: #2AB04A;
+            border-color: #2AB04A;
             transform: translateY(0);
             box-shadow: 0 2px 6px rgba(52, 199, 89, 0.2);
             transition: all 0.1s;
+        }
+
+        #jbh-auto-btn.processing {
+            background: #FF9500;
+            color: white;
+            border-color: #FF9500;
+            cursor: wait;
+            animation: jbh-pulse 1.5s ease-in-out infinite;
+        }
+
+        #jbh-auto-btn.processing:hover {
+            background: #FF9500;
+            transform: translateY(0);
+        }
+
+        @keyframes jbh-pulse {
+            0%, 100% {
+                box-shadow: 0 4px 12px rgba(255, 149, 0, 0.3);
+            }
+            50% {
+                box-shadow: 0 4px 20px rgba(255, 149, 0, 0.5);
+            }
         }
 
         #jbh-auto-btn:disabled {
             opacity: 0.5;
             cursor: not-allowed;
             transform: none;
+            background: white;
+            color: black;
+            border-color: transparent;
         }
 
         #jbh-auto-btn:disabled:hover {
@@ -1648,6 +1692,7 @@
             box-shadow: none;
             background: white;
             color: black;
+            border-color: transparent;
         }
 
         /* ROW INFO HOVER EFFECTS */
