@@ -18,6 +18,8 @@
   const LS_KEY_CALC = "jbh_give_calc";
   const LS_KEY_REASON = "jbh_give_reason";
   const LS_KEY_ONLY_ZERO = "jbh_only_zero";
+  let obs = null;
+  let updateTimer = null;
 
   function parseMoney(txt) {
     if (!txt) return 0;
@@ -164,11 +166,13 @@
 
     // MacBook Air SKUs
     "453376", // MacBook Air 13" M4 256GB/16GB Midnight
-    "453376", // MacBook Air 13" M4 256GB/16GB Silver
+    // TODO: "453376" is duplicated above — verify if Silver has a different SKU
+    // "453376", // MacBook Air 13" M4 256GB/16GB Silver
     "453378", // MacBook Air 13" M4 256GB/16GB Starlight
     "453379", // MacBook Air 13" M4 256GB/16GB Sky Blue
 
-    "453379", // MacBook Air 13" M4 512GB/16GB Starlight
+    // TODO: "453379" is duplicated above — verify if 512GB Starlight has a different SKU
+    // "453379", // MacBook Air 13" M4 512GB/16GB Starlight
     "453381", // MacBook Air 13" M4 512GB/16GB Midnight
     "453377", // MacBook Air 13" M4 512GB/16GB Silver
     "453371", // MacBook Air 13" M4 512GB/16GB Sky Blue
@@ -530,9 +534,7 @@
         };
       }
 
-      const isSoloEligible = true;
-
-      if (ctx.saleItemCount === 1 && qty === 1 && isSoloEligible) {
+      if (ctx.saleItemCount === 1 && qty === 1) {
         return {
           value: saleTotal * 0.002,
           rate: 0.002,
@@ -717,10 +719,6 @@
     }, duration);
   }
 
-  function showSummary(msg) {
-    showToast(msg, 5000);
-  }
-
   function notify(msg) {
     showToast(msg, 4500); // Increased from 2500 to 4500
   }
@@ -842,11 +840,15 @@
   }
 
   async function autoFixZeros() {
-    // Set button to processing state
+    // Set button to processing state (clear inline styles so CSS .processing class takes effect)
     const runBtn = document.getElementById("jbh-auto-btn");
     if (runBtn) {
       runBtn.classList.add("processing");
       runBtn.disabled = true;
+      runBtn.style.background = "";
+      runBtn.style.color = "";
+      runBtn.style.opacity = "";
+      runBtn.style.cursor = "";
     }
 
     try {
@@ -886,17 +888,6 @@
       return { ...f, isPrimary };
     });
 
-    const hasAppleProduct = finalRoles.some(f => f.isPrimary && (f._isAirPods || isAppleProduct("IPHONE"))); // Simplification: Apple Product check inside loop is better but context needs global flags.
-    // Re-calculating strict flags for context passing
-    const appleItemCount = finalRoles.filter(f => f.isPrimary && f._isPrimary).length; // Approximate
-    // Actually, let's simplify context passing. computeCommission does the heavy lifting per item.
-    // We just need global flags.
-
-    const appleSoldWithOthers = finalRoles.filter(f => f.isPrimary).length < containers.length; 
-    // Wait, appleSoldWithOthers logic: "When accessories are sold with a primary product"
-    // If we have 1 Primary and 1 Accessory -> appleSoldWithOthers = true?
-    // Actually the original logic was: hasAppleProduct && containers.length > appleItemCount.
-    
     const primaryCount = finalRoles.filter(f => f.isPrimary).length;
     const hasPrimary = primaryCount > 0;
     
@@ -1171,18 +1162,17 @@
 
     // Inject info
     // We disconnect observer to prevent infinite loops during DOM manipulation
-    obs.disconnect();
+    if (obs) obs.disconnect();
 
     try {
         containers.forEach((c) => {
             const result = computeCommission(c, ctx);
             if (!result) return;
 
-            const card = c.parentElement || c;
             const trackingId = `${result.name}|${result.rate}|${result.value}`;
 
-            // Check for existing UI in the card (not in c)
-            const existingUI = card.querySelector('.jbh-row-info');
+            // Check for existing UI in the container
+            const existingUI = c.querySelector('.jbh-row-info');
             if (existingUI) {
                 // If UI exists and matches current data, skip
                 if (existingUI.dataset.trackingId === trackingId) {
@@ -1232,13 +1222,11 @@
                 display: "flex",
                 flexDirection: "column",
                 gap: "12px",
-                width: "260px",
+                width: "100%",
+                maxWidth: "260px",
+                boxSizing: "border-box",
                 boxShadow: "0 12px 32px rgba(0, 0, 0, 0.4)",
                 fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif',
-                position: "absolute",
-                bottom: "10px",
-                left: "10px",
-                zIndex: "100"
             });
 
             // Calculate truncated value for display to match actual behavior
@@ -1336,32 +1324,54 @@
             });
 
             bottomSection.appendChild(btnRow);
+
+            // Reset to $0 button
+            const resetBtn = document.createElement("button");
+            resetBtn.textContent = "Reset to $0";
+            Object.assign(resetBtn.style, {
+                border: "none",
+                background: "rgba(255, 59, 48, 0.15)",
+                borderRadius: "6px",
+                padding: "6px 0",
+                cursor: "pointer",
+                fontSize: "11px",
+                fontWeight: "600",
+                color: "#FF3B30",
+                transition: "all 0.2s",
+                textAlign: "center",
+                width: "100%",
+                marginTop: "2px"
+            });
+            resetBtn.addEventListener("mouseenter", () => {
+                resetBtn.style.background = "rgba(255, 59, 48, 0.3)";
+                resetBtn.style.transform = "scale(1.02)";
+            });
+            resetBtn.addEventListener("mouseleave", () => {
+                resetBtn.style.background = "rgba(255, 59, 48, 0.15)";
+                resetBtn.style.transform = "scale(1)";
+            });
+            resetBtn.addEventListener("click", async (e) => {
+                e.stopPropagation();
+                resetBtn.textContent = "...";
+                resetBtn.disabled = true;
+                await applySingleAdjustment(c, 0, "Reset to $0");
+                resetBtn.disabled = false;
+                resetBtn.textContent = "Reset to $0";
+            });
+            bottomSection.appendChild(resetBtn);
+
             infoDiv.appendChild(bottomSection);
 
-            // Injection Point: Bottom Left of Product Box
-            // card is already defined above
-            if (card) {
-                const style = window.getComputedStyle(card);
-                if (style.position === 'static') card.style.position = 'relative';
-                
-                // Adjust infoDiv style for absolute positioning at bottom left
-                Object.assign(infoDiv.style, {
-                   position: "absolute",
-                   bottom: "10px",
-                   left: "10px",
-                   zIndex: "100"
-                });
-
-                card.appendChild(infoDiv);
-            } else {
-                c.appendChild(infoDiv);
-            }
+            // Injection Point: Append as flow element inside the product container
+            // Using normal document flow instead of absolute positioning so it
+            // always renders regardless of screen size or parent overflow settings
+            c.appendChild(infoDiv);
         });
     } catch(e) {
         console.error("JBH Helper Error:", e);
     } finally {
         // Reconnect observer
-        obs.observe(document.documentElement, { childList: true, subtree: true });
+        if (obs) obs.observe(document.documentElement, { childList: true, subtree: true });
     }
   }
 
@@ -1682,23 +1692,6 @@
             }
         }
 
-        #jbh-auto-btn:disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
-            transform: none;
-            background: white;
-            color: black;
-            border-color: transparent;
-        }
-
-        #jbh-auto-btn:disabled:hover {
-            transform: none;
-            box-shadow: none;
-            background: white;
-            color: black;
-            border-color: transparent;
-        }
-
         /* ROW INFO HOVER EFFECTS */
         .jbh-row-info {
             transition: opacity 0.3s ease, background 0.3s ease;
@@ -1798,28 +1791,53 @@
     const wrap = document.createElement("div");
     wrap.id = "jbh-helper-wrap";
 
-    // Load saved position and size
+    // Load saved position and size (with bounds checking)
     const savedPos = localStorage.getItem("jbh-wrap-position");
     const savedSize = localStorage.getItem("jbh-wrap-size");
     if (savedPos) {
-      const pos = JSON.parse(savedPos);
-      wrap.style.left = pos.left;
-      wrap.style.top = pos.top;
-      wrap.style.right = "auto";
-      wrap.style.bottom = "auto";
+      try {
+        const pos = JSON.parse(savedPos);
+        const left = parseInt(pos.left, 10);
+        const top = parseInt(pos.top, 10);
+        if (!isNaN(left) && !isNaN(top) &&
+            left >= 0 && left < window.innerWidth - 50 &&
+            top >= 0 && top < window.innerHeight - 50) {
+          wrap.style.left = pos.left;
+          wrap.style.top = pos.top;
+          wrap.style.right = "auto";
+          wrap.style.bottom = "auto";
+        } else {
+          localStorage.removeItem("jbh-wrap-position");
+        }
+      } catch {
+        localStorage.removeItem("jbh-wrap-position");
+      }
     }
     if (savedSize) {
-      const size = JSON.parse(savedSize);
-      wrap.style.width = size.width;
-      wrap.style.height = size.height;
+      try {
+        const size = JSON.parse(savedSize);
+        const w = parseInt(size.width, 10);
+        const h = parseInt(size.height, 10);
+        if (!isNaN(w) && w >= 200 && w <= window.innerWidth) {
+          wrap.style.width = size.width;
+        }
+        if (!isNaN(h) && h >= 150 && h <= window.innerHeight) {
+          wrap.style.height = size.height;
+        }
+      } catch {
+        localStorage.removeItem("jbh-wrap-size");
+      }
     } else {
       wrap.style.width = "220px";
     }
 
     // Shared Tooltip Element (append to body to avoid overflow clipping)
-    const tooltip = document.createElement("div");
-    tooltip.id = "jbh-tooltip";
-    document.body.appendChild(tooltip);
+    let tooltip = document.getElementById("jbh-tooltip");
+    if (!tooltip) {
+      tooltip = document.createElement("div");
+      tooltip.id = "jbh-tooltip";
+      document.body.appendChild(tooltip);
+    }
 
     // Drag Handle
     const dragHandle = document.createElement("div");
@@ -2067,9 +2085,13 @@
   }
 
   addUIIfMissing();
-  const obs = new MutationObserver(() => {
-    addUIIfMissing();
-    injectRowInfo();
+  obs = new MutationObserver(() => {
+    if (updateTimer) return;
+    updateTimer = setTimeout(() => {
+      updateTimer = null;
+      addUIIfMissing();
+      injectRowInfo();
+    }, 150);
   });
   obs.observe(document.documentElement, { childList: true, subtree: true });
 })();
