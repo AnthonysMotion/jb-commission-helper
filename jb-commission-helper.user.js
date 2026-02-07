@@ -1171,15 +1171,15 @@
 
             const trackingId = `${result.name}|${result.rate}|${result.value}`;
 
-            // Check for existing UI in the container
-            const existingUI = c.querySelector('.jbh-row-info');
-            if (existingUI) {
+            // Check for existing UI placed after the container (sibling)
+            const nextEl = c.nextElementSibling;
+            if (nextEl && nextEl.classList.contains('jbh-row-info')) {
                 // If UI exists and matches current data, skip
-                if (existingUI.dataset.trackingId === trackingId) {
+                if (nextEl.dataset.trackingId === trackingId) {
                     return;
                 }
                 // If UI exists but stale (wrong product/price), remove it
-                existingUI.remove();
+                nextEl.remove();
             }
 
             // Content Building
@@ -1362,10 +1362,10 @@
 
             infoDiv.appendChild(bottomSection);
 
-            // Injection Point: Append as flow element inside the product container
-            // Using normal document flow instead of absolute positioning so it
-            // always renders regardless of screen size or parent overflow settings
-            c.appendChild(infoDiv);
+            // Injection Point: Insert as sibling AFTER the product container
+            // This ensures the info card is never clipped by the container's
+            // overflow or height constraints on any screen size
+            c.insertAdjacentElement('afterend', infoDiv);
         });
     } catch(e) {
         console.error("JBH Helper Error:", e);
