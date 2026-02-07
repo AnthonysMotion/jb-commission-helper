@@ -20,6 +20,9 @@
   const LS_KEY_ONLY_ZERO = "jbh_only_zero";
   let obs = null;
   let updateTimer = null;
+  const LS_KEY_CONFIRM = "jbh_confirm";
+  const LS_KEY_COLLAPSED = "jbh_collapsed";
+  let lastRunData = null;
 
   function parseMoney(txt) {
     if (!txt) return 0;
@@ -839,6 +842,247 @@
     return computed;
   }
 
+  // --- SALE PREVIEW (shared by summary + confirmation) ---
+  function computeSalePreview() {
+    const containers = getProductContainers();
+    if (!containers.length) return null;
+
+    const flags = containers.map((c) => {
+      const nU = getProductName(c).toUpperCase();
+      const appleCare = isAppleCare(nU);
+      const _isAirPods = isAirPods(nU);
+      const _isPrimary = isAppleProduct(nU, c) || isMainNonAppleProduct(nU, c);
+      const _isRealPrimary = _isPrimary && !_isAirPods;
+      return { appleCare, _isAirPods, _isRealPrimary, _isPrimary };
+    });
+
+    const hasRealPrimaryProduct = flags.some(f => f._isRealPrimary);
+    const finalRoles = flags.map(f => {
+      let isPrimary = f._isPrimary;
+      if (f._isAirPods && hasRealPrimaryProduct) isPrimary = false;
+      return { ...f, isPrimary };
+    });
+    const primaryCount = finalRoles.filter(f => f.isPrimary).length;
+    const hasPrimary = primaryCount > 0;
+
+    const ctx = {
+      saleItemCount: containers.length,
+      hasRealPrimaryProduct,
+      appleSoldWithOthers: hasPrimary && containers.length > primaryCount,
+      nonAppleMainSoldWithOthers: hasPrimary && containers.length > primaryCount,
+      appleCareSoldWithAppleAndOthers: false
+    };
+
+    const hasAppleCare = flags.some(f => f.appleCare);
+    const appleCareCount = flags.filter(f => f.appleCare).length;
+    if (hasAppleCare && hasPrimary && containers.length > (primaryCount + appleCareCount)) {
+      ctx.appleCareSoldWithAppleAndOthers = true;
+    }
+
+    const onlyZeroOn = localStorage.getItem(LS_KEY_ONLY_ZERO) === "true";
+    const targets = onlyZeroOn
+      ? containers.filter((c) => getOriginalComm(c) === 0)
+      : containers;
+
+    const items = [];
+    let total = 0;
+
+    for (const c of containers) {
+      const computedRaw = computeCommission(c, ctx);
+      if (!computedRaw) continue;
+
+      const saleTotal = getSaleTotal(c) || 0;
+      const originalComm = getOriginalComm(c);
+      let computed = clampToOriginalIfLower(computedRaw, originalComm, saleTotal);
+
+      const truncatedValue = trunc3(computed.value);
+      if (truncatedValue !== computed.value) {
+        computed = { ...computed, value: truncatedValue };
+      }
+
+      const isTarget = targets.includes(c);
+      items.push({
+        name: computed.name,
+        rate: computed.rate,
+        value: computed.value,
+        saleTotal,
+        originalComm,
+        isTarget,
+        keptOriginal: computed.keptOriginal
+      });
+      total += computed.value;
+    }
+
+    return { items, total: trunc3(total), targetCount: targets.length, totalCount: containers.length };
+  }
+
+  function showConfirmation(preview) {
+    return new Promise((resolve) => {
+      let resolved = false;
+      const cleanup = () => {
+        if (resolved) return;
+        resolved = true;
+        backdrop.remove();
+        dialog.remove();
+      };
+
+      // Backdrop: click-to-dismiss + dim background
+      const backdrop = document.createElement("div");
+      backdrop.id = "jbh-confirm-backdrop";
+      backdrop.setAttribute("style", [
+        "position:fixed", "top:0", "left:0", "width:100vw", "height:100vh",
+        "background:rgba(0,0,0,0.65)",
+        "z-index:2147483646",
+        "cursor:pointer"
+      ].join(";") + ";");
+      backdrop.addEventListener("click", () => { cleanup(); resolve(false); });
+
+      // Dialog: fixed center, no parent dependencies
+      const dialog = document.createElement("div");
+      dialog.id = "jbh-confirm-dialog";
+      dialog.setAttribute("style", [
+        "position:fixed",
+        "top:50%", "left:50%",
+        "transform:translate(-50%,-50%)",
+        "z-index:2147483647",
+        "background:#1e1e1e",
+        "border-radius:16px",
+        "border:1px solid rgba(255,255,255,0.15)",
+        "padding:24px",
+        "max-width:400px", "width:90vw", "max-height:70vh",
+        "display:flex", "flex-direction:column", "gap:16px",
+        "color:white",
+        "box-shadow:0 20px 60px rgba(0,0,0,0.5)",
+        "font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif",
+        "overflow:hidden"
+      ].join(";") + ";");
+
+      // Prevent clicks on dialog from dismissing
+      dialog.addEventListener("click", (e) => e.stopPropagation());
+
+      // Title
+      const titleEl = document.createElement("div");
+      titleEl.textContent = "Confirm Adjustment";
+      titleEl.setAttribute("style", "font-size:16px;font-weight:700;text-align:center;flex-shrink:0;");
+      dialog.appendChild(titleEl);
+
+      // Items list
+      const list = document.createElement("div");
+      list.setAttribute("style", "display:flex;flex-direction:column;gap:6px;overflow-y:auto;max-height:40vh;padding:4px 0;");
+
+      for (const item of preview.items) {
+        const row = document.createElement("div");
+        const bg = item.isTarget ? "rgba(52,199,89,0.1)" : "rgba(255,255,255,0.05)";
+        const op = item.isTarget ? "1" : "0.5";
+        row.setAttribute("style", `display:flex;justify-content:space-between;align-items:center;font-size:13px;padding:6px 10px;border-radius:8px;background:${bg};opacity:${op};`);
+
+        const nameSpan = document.createElement("span");
+        nameSpan.textContent = item.name || "Unknown";
+        nameSpan.setAttribute("style", "flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-right:8px;");
+
+        const valSpan = document.createElement("span");
+        const fmtVal = item.value < 0 ? `-$${Math.abs(item.value)}` : `$${item.value}`;
+        valSpan.textContent = `${fmtPercent(item.rate)}% = ${fmtVal}`;
+        const valColor = item.isTarget ? "#34C759" : "#888";
+        valSpan.setAttribute("style", `font-weight:600;flex-shrink:0;color:${valColor};`);
+
+        row.append(nameSpan, valSpan);
+        list.appendChild(row);
+      }
+      dialog.appendChild(list);
+
+      // Total
+      const totalEl = document.createElement("div");
+      totalEl.setAttribute("style", "text-align:center;font-size:15px;font-weight:700;padding:8px 0;border-top:1px solid rgba(255,255,255,0.1);flex-shrink:0;");
+      const totalFmt = preview.total < 0 ? `-$${Math.abs(preview.total)}` : `$${preview.total}`;
+      totalEl.innerHTML = `Total: <span style="color:#34C759">${totalFmt}</span> <span style="color:#888;font-size:12px">(${preview.targetCount} items to adjust)</span>`;
+      dialog.appendChild(totalEl);
+
+      // Buttons
+      const btnRow = document.createElement("div");
+      btnRow.setAttribute("style", "display:flex;gap:10px;flex-shrink:0;");
+
+      const cancelBtn = document.createElement("button");
+      cancelBtn.textContent = "Cancel";
+      cancelBtn.setAttribute("style", "flex:1;padding:10px;border-radius:10px;border:1px solid rgba(255,255,255,0.2);background:transparent;color:#fff;font-size:14px;font-weight:600;cursor:pointer;");
+      cancelBtn.addEventListener("click", () => { cleanup(); resolve(false); });
+
+      const confirmBtn = document.createElement("button");
+      confirmBtn.textContent = "Confirm";
+      confirmBtn.setAttribute("style", "flex:1;padding:10px;border-radius:10px;border:none;background:#34C759;color:#fff;font-size:14px;font-weight:700;cursor:pointer;");
+      confirmBtn.addEventListener("click", () => { cleanup(); resolve(true); });
+
+      btnRow.append(cancelBtn, confirmBtn);
+      dialog.appendChild(btnRow);
+
+      // Append both directly to body
+      document.body.appendChild(backdrop);
+      document.body.appendChild(dialog);
+    });
+  }
+
+  async function undoLastRun() {
+    if (!lastRunData || !lastRunData.length) {
+      notify("Nothing to undo.");
+      return;
+    }
+
+    const undoBtn = document.getElementById("jbh-undo-btn");
+    if (undoBtn) {
+      undoBtn.disabled = true;
+      undoBtn.textContent = "Undoing...";
+    }
+
+    const runBtn = document.getElementById("jbh-auto-btn");
+    if (runBtn) {
+      runBtn.classList.add("processing");
+      runBtn.disabled = true;
+      runBtn.style.background = "";
+      runBtn.style.color = "";
+      runBtn.style.opacity = "";
+      runBtn.style.cursor = "";
+    }
+
+    try {
+      for (let i = 0; i < lastRunData.length; i++) {
+        const entry = lastRunData[i];
+        const btn = getAdjustButton(entry.container);
+        if (!btn) continue;
+
+        if (runBtn) runBtn.textContent = `Undoing ${i + 1}/${lastRunData.length}...`;
+
+        btn.click();
+        await sleep(220);
+
+        const ok = await fillAndSaveModal({
+          commissionValue: entry.originalComm || 0,
+          commentText: "Undo adjustment"
+        });
+
+        if (!ok) {
+          notify(`Undo stopped at ${i + 1}. Modal not found.`);
+          return;
+        }
+
+        notify(`Reverted ${i + 1}/${lastRunData.length}: ${entry.name}`);
+        await sleep(250);
+      }
+
+      notify("Undo complete");
+      lastRunData = null;
+      if (undoBtn) undoBtn.style.display = "none";
+    } finally {
+      if (runBtn) {
+        runBtn.classList.remove("processing");
+        runBtn.disabled = false;
+      }
+      if (undoBtn) {
+        undoBtn.disabled = false;
+        undoBtn.textContent = "Undo Last Run";
+      }
+    }
+  }
+
   async function autoFixZeros() {
     // Set button to processing state (clear inline styles so CSS .processing class takes effect)
     const runBtn = document.getElementById("jbh-auto-btn");
@@ -918,6 +1162,26 @@
       return;
     }
 
+    // Confirmation dialog (if enabled)
+    const confirmOn = localStorage.getItem(LS_KEY_CONFIRM) === "true";
+    if (confirmOn) {
+      const preview = computeSalePreview();
+      if (!preview) return;
+      const confirmed = await showConfirmation(preview);
+      if (!confirmed) {
+        notify("Adjustment cancelled.");
+        return;
+      }
+    }
+
+    // Store original values for undo
+    const undoEntries = targets.map(c => ({
+      container: c,
+      originalComm: getOriginalComm(c),
+      saleTotal: getSaleTotal(c) || 0,
+      name: getProductName(c)
+    }));
+
     notify(`Adjusting ${targets.length} items...`);
 
     const calcOn = localStorage.getItem(LS_KEY_CALC) === "true";
@@ -978,6 +1242,9 @@
         );
       }
 
+      // Update button with progress
+      if (runBtn) runBtn.textContent = `Adjusting ${i + 1}/${targets.length}...`;
+
       btn.click();
       await sleep(220);
 
@@ -991,8 +1258,6 @@
         return;
       }
 
-      // Consolidated Notification
-      // Format: "Adjusted 1/5 -> 0.5% for PRODUCT NAME"
       if (computed.keptOriginal) {
         notify(`Kept original $${originalComm} for ${nU} (auto was lower).`);
       } else {
@@ -1004,6 +1269,11 @@
 
       await sleep(250);
     }
+
+    // Save undo data
+    lastRunData = undoEntries;
+    const undoBtnEl = document.getElementById("jbh-undo-btn");
+    if (undoBtnEl) undoBtnEl.style.display = "block";
 
     notify("Done ✅");
     } finally {
@@ -1024,7 +1294,8 @@
     const isOnOverview = headers.some(h => h.textContent.includes("Sale Overview"));
     
     if (isOnOverview) {
-      if (btn.textContent !== "Run Adjustment") {
+      // Don't overwrite button text during processing
+      if (!btn.classList.contains("processing") && btn.textContent !== "Run Adjustment") {
         btn.textContent = "Run Adjustment";
         btn.disabled = false;
         btn.style.opacity = "1";
@@ -1041,7 +1312,60 @@
         btn.style.background = "#444";
         btn.style.color = "#aaa";
       }
+      // Clear undo data when navigating away
+      lastRunData = null;
     }
+
+    // Update live sale summary
+    updateSaleSummary(isOnOverview);
+
+    // Update undo button visibility
+    const undoBtnEl = document.getElementById("jbh-undo-btn");
+    if (undoBtnEl) {
+      undoBtnEl.style.display = (lastRunData && lastRunData.length && isOnOverview) ? "block" : "none";
+    }
+  }
+
+  function updateSaleSummary(isOnOverview) {
+    const summaryEl = document.getElementById("jbh-sale-summary");
+    if (!summaryEl) return;
+
+    // Don't compute when collapsed or not on overview
+    const wrap = document.getElementById("jbh-helper-wrap");
+    if (!isOnOverview || (wrap && wrap.classList.contains("collapsed"))) {
+      summaryEl.style.display = "none";
+      return;
+    }
+
+    const preview = computeSalePreview();
+    if (!preview || !preview.items.length) {
+      summaryEl.style.display = "none";
+      return;
+    }
+
+    summaryEl.style.display = "block";
+
+    let html = '<div style="font-size:11px; font-weight:700; color:#888; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:8px; text-align:center;">Sale Preview</div>';
+
+    for (const item of preview.items) {
+      const rawName = item.name || "Unknown";
+      const name = rawName.length > 25 ? rawName.substring(0, 22) + "..." : rawName;
+      const fmtVal = item.value < 0 ? `-$${Math.abs(item.value)}` : `$${item.value}`;
+      const color = item.isTarget ? "#34C759" : "#666";
+      const opacity = item.isTarget ? "1" : "0.6";
+      html += `<div style="display:flex; justify-content:space-between; font-size:11px; padding:2px 0; opacity:${opacity};">`;
+      html += `<span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1; margin-right:6px; color:#ccc;">${name}</span>`;
+      html += `<span style="flex-shrink:0; color:${color}; font-weight:600;">${fmtPercent(item.rate)}% = ${fmtVal}</span>`;
+      html += '</div>';
+    }
+
+    const totalFmt = preview.total < 0 ? `-$${Math.abs(preview.total)}` : `$${preview.total}`;
+    html += `<div style="margin-top:6px; padding-top:6px; border-top:1px solid rgba(255,255,255,0.1); text-align:center; font-size:12px; font-weight:700;">`;
+    html += `Total: <span style="color:#34C759">${totalFmt}</span>`;
+    html += ` <span style="color:#888; font-weight:400; font-size:11px;">(${preview.targetCount} to adjust)</span>`;
+    html += '</div>';
+
+    summaryEl.innerHTML = html;
   }
 
   // --- SINGLE ADJUSTMENT LOGIC ---
@@ -1359,6 +1683,36 @@
                 resetBtn.textContent = "Reset to $0";
             });
             bottomSection.appendChild(resetBtn);
+
+            // Custom rate input (Enter to apply)
+            const customInput = document.createElement("input");
+            customInput.type = "text";
+            customInput.placeholder = "Custom % (Enter to apply)";
+            customInput.className = "jbh-custom-input";
+            Object.assign(customInput.style, { width: "100%", marginTop: "4px" });
+
+            customInput.addEventListener("keydown", async (e) => {
+                if (e.key !== "Enter") return;
+                e.preventDefault();
+                e.stopPropagation();
+                let rawVal = customInput.value.trim();
+                if (!rawVal) return;
+                rawVal = rawVal.replace(/%$/, "");
+                const pct = parseFloat(rawVal);
+                if (isNaN(pct) || pct < 0 || pct > 100) {
+                    notify("Invalid percentage (0-100)");
+                    return;
+                }
+                const rate = pct / 100;
+                customInput.disabled = true;
+                customInput.value = "Applying...";
+                await applySingleAdjustment(c, rate);
+                customInput.disabled = false;
+                customInput.value = "";
+            });
+            customInput.addEventListener("click", (e) => e.stopPropagation());
+
+            bottomSection.appendChild(customInput);
 
             infoDiv.appendChild(bottomSection);
 
@@ -1692,6 +2046,80 @@
             }
         }
 
+        /* COLLAPSED STATE */
+        #jbh-helper-wrap.collapsed {
+            min-height: auto;
+            height: auto !important;
+        }
+        #jbh-helper-wrap.collapsed .jbh-content {
+            display: none;
+        }
+        #jbh-helper-wrap.collapsed .jbh-resize-handle {
+            display: none;
+        }
+
+        .jbh-minimize-btn {
+            background: none;
+            border: none;
+            color: #888;
+            cursor: pointer;
+            font-size: 14px;
+            padding: 0 6px;
+            flex-shrink: 0;
+            transition: color 0.2s;
+            line-height: 1;
+        }
+        .jbh-minimize-btn:hover {
+            color: #fff;
+        }
+
+        /* UNDO BUTTON */
+        #jbh-undo-btn {
+            width: 100%;
+            padding: 8px 0;
+            border-radius: 8px;
+            border: 1px solid rgba(255, 59, 48, 0.3);
+            background: rgba(255, 59, 48, 0.1);
+            color: #FF3B30;
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            margin-top: 8px;
+            display: none;
+        }
+        #jbh-undo-btn:hover {
+            background: rgba(255, 59, 48, 0.2);
+            border-color: rgba(255, 59, 48, 0.5);
+        }
+
+        /* SALE SUMMARY */
+        #jbh-sale-summary {
+            padding: 10px;
+            background: rgba(255,255,255,0.05);
+            border-radius: 10px;
+        }
+
+        /* CUSTOM RATE INPUT */
+        .jbh-custom-input {
+            flex: 1;
+            background: #222;
+            border: 1px solid #444;
+            border-radius: 6px;
+            padding: 5px 8px;
+            color: #fff;
+            font-size: 12px;
+            outline: none;
+            min-width: 0;
+            font-family: inherit;
+        }
+        .jbh-custom-input:focus {
+            border-color: #34C759;
+        }
+        .jbh-custom-input::placeholder {
+            color: #666;
+        }
+
         /* ROW INFO HOVER EFFECTS */
         .jbh-row-info {
             transition: opacity 0.3s ease, background 0.3s ease;
@@ -1845,9 +2273,27 @@
     const title = document.createElement("div");
     title.className = "jbh-title";
     title.textContent = "COMMISSION HELPER";
+
+    // Minimize/collapse button
+    const isCollapsedOnLoad = localStorage.getItem(LS_KEY_COLLAPSED) === "true";
+    const minimizeBtn = document.createElement("button");
+    minimizeBtn.className = "jbh-minimize-btn";
+    minimizeBtn.textContent = isCollapsedOnLoad ? "+" : "\u2212";
+    minimizeBtn.title = "Minimize / Expand";
+    minimizeBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const isCollapsed = wrap.classList.toggle("collapsed");
+      localStorage.setItem(LS_KEY_COLLAPSED, isCollapsed ? "true" : "false");
+      minimizeBtn.textContent = isCollapsed ? "+" : "\u2212";
+    });
+    if (isCollapsedOnLoad) {
+      wrap.classList.add("collapsed");
+    }
+
     const dragIcon = document.createElement("div");
     dragIcon.className = "jbh-drag-icon";
     dragHandle.appendChild(title);
+    dragHandle.appendChild(minimizeBtn);
     dragHandle.appendChild(dragIcon);
     wrap.appendChild(dragHandle);
 
@@ -1905,10 +2351,17 @@
     // Scrollable content area for toggles
     const scrollableContent = document.createElement("div");
     scrollableContent.className = "jbh-content-scrollable";
+
+    // Live sale summary (inserted at top of scrollable area)
+    const summary = document.createElement("div");
+    summary.id = "jbh-sale-summary";
+    summary.style.display = "none";
+    scrollableContent.appendChild(summary);
     
     scrollableContent.appendChild(createToggle(LS_KEY_ONLY_ZERO, "Edit $0 Commissions Only", "Only adjust products sold with $0 commission. \n\nUseful for fixing missed commissions without overwriting the existing commission values."));
     scrollableContent.appendChild(createToggle(LS_KEY_CALC, "Add Formula/Calculation", "Add the math formula used to the reason/comment field. \n\n(e.g., 0.5% * $1000 = $5.00)"));
     scrollableContent.appendChild(createToggle(LS_KEY_REASON, "Add Reason", "Add the explanation note to the reason/comment field. \n\n(e.g., 'IPS Multiplier', 'Main Product with attach/AC')"));
+    scrollableContent.appendChild(createToggle(LS_KEY_CONFIRM, "Confirm Before Running", "Show a confirmation dialog with a preview of all adjustments before applying them."));
     
     content.appendChild(scrollableContent);
 
@@ -1920,6 +2373,14 @@
     btn.textContent = "Run Adjustment";
     btn.addEventListener("click", autoFixZeros);
     buttonContainer.appendChild(btn);
+
+    // Undo button (hidden by default, shown after running)
+    const undoBtnEl = document.createElement("button");
+    undoBtnEl.id = "jbh-undo-btn";
+    undoBtnEl.textContent = "Undo Last Run";
+    undoBtnEl.addEventListener("click", undoLastRun);
+    buttonContainer.appendChild(undoBtnEl);
+
     content.appendChild(buttonContainer);
 
     const resizeHandles = ['n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw'];
