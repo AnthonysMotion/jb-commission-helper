@@ -35,6 +35,25 @@
     "Other",
   ];
 
+  // Liquid glass theme: noise/blur background, translucent panels
+  const THEME = {
+    bg: "rgba(8, 8, 12, 0.92)",
+    bgSolid: "#08080c",
+    blur: "28px",
+    border: "1px solid rgba(255, 255, 255, 0.06)",
+    borderHover: "1px solid rgba(255, 255, 255, 0.12)",
+    noise: "url('https://grainy-gradients.vercel.app/noise.svg')",
+    noiseOpacity: "0.07",
+    accent: "#34C759",
+    accentHover: "#2AB04A",
+    textMain: "#FFFFFF",
+    textDim: "rgba(255, 255, 255, 0.55)",
+    textDark: "rgba(255, 255, 255, 0.28)",
+    radius: "20px",
+    shadow: "0 25px 60px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.04) inset",
+    shadowLift: "0 30px 70px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(255, 255, 255, 0.06) inset",
+  };
+
   function parseMoney(txt) {
     if (!txt) return 0;
     // Preserve negative sign for refunds
@@ -820,9 +839,9 @@
 
     await pickReasonOption(reason);
 
-    const fullComment = reason === "Other" && selectedOtherText
-      ? (commentText ? `${selectedOtherText}\n\n${commentText}` : selectedOtherText)
-      : commentText;
+    const fullComment = reason === "Other"
+      ? (selectedOtherText ? (commentText ? `${selectedOtherText}\n\n${commentText}` : selectedOtherText) : commentText)
+      : (commentText || "") + (selectedOtherText ? (commentText ? "\n\n" : "") + selectedOtherText : "");
 
     if (fullComment) {
       const customTa = await waitForCustomReasonInput();
@@ -943,12 +962,14 @@
         dialog.remove();
       };
 
-      // Backdrop: click-to-dismiss + dim background
+      // Backdrop: frosted glass overlay (noise/blur)
       const backdrop = document.createElement("div");
       backdrop.id = "jbh-confirm-backdrop";
       backdrop.setAttribute("style", [
         "position:fixed", "top:0", "left:0", "width:100vw", "height:100vh",
-        "background:rgba(0,0,0,0.65)",
+        "background:rgba(8,8,12,0.55)",
+        "backdrop-filter:blur(20px)",
+        "-webkit-backdrop-filter:blur(20px)",
         "z-index:2147483646",
         "cursor:pointer"
       ].join(";") + ";");
@@ -962,46 +983,61 @@
         "top:50%", "left:50%",
         "transform:translate(-50%,-50%)",
         "z-index:2147483647",
-        "background:#1e1e1e",
-        "border-radius:16px",
-        "border:1px solid rgba(255,255,255,0.15)",
-        "padding:24px",
-        "max-width:400px", "width:90vw", "max-height:70vh",
-        "display:flex", "flex-direction:column", "gap:16px",
+        `background:${THEME.bg}`,
+        `backdrop-filter:blur(${THEME.blur})`,
+        `border-radius:${THEME.radius}`,
+        `border:${THEME.border}`,
+        "padding:28px",
+        "max-width:420px", "width:90vw", "max-height:80vh",
+        "display:flex", "flex-direction:column", "gap:20px",
         "color:white",
-        "box-shadow:0 20px 60px rgba(0,0,0,0.5)",
-        "font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif",
-        "overflow:hidden"
+        `box-shadow:${THEME.shadow}`,
+        "font-family:-apple-system,BlinkMacSystemFont,Inter,Segoe UI,Roboto,sans-serif",
+        "overflow:hidden",
+        "animation:jbh-fade-in 0.5s cubic-bezier(0.16, 1, 0.3, 1) forwards"
       ].join(";") + ";");
+
+      // Add noise overlay for liquid glass texture
+      const noiseOverlay = document.createElement("div");
+      Object.assign(noiseOverlay.style, {
+          position: "absolute",
+          top: "0", left: "0", right: "0", bottom: "0",
+          backgroundImage: THEME.noise,
+          opacity: THEME.noiseOpacity,
+          pointerEvents: "none",
+          zIndex: "0",
+      });
+      dialog.appendChild(noiseOverlay);
 
       // Prevent clicks on dialog from dismissing
       dialog.addEventListener("click", (e) => e.stopPropagation());
 
       // Title
       const titleEl = document.createElement("div");
-      titleEl.textContent = "Confirm Adjustment";
-      titleEl.setAttribute("style", "font-size:16px;font-weight:700;text-align:center;flex-shrink:0;");
+      titleEl.textContent = "Confirm Adjustments";
+      titleEl.setAttribute("style", `font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:1px;color:${THEME.textDim};text-align:center;flex-shrink:0;position:relative;zIndex:1;`);
       dialog.appendChild(titleEl);
 
       // Items list
       const list = document.createElement("div");
-      list.setAttribute("style", "display:flex;flex-direction:column;gap:6px;overflow-y:auto;max-height:40vh;padding:4px 0;");
+      list.setAttribute("style", "display:flex;flex-direction:column;gap:8px;overflow-y:auto;max-height:45vh;padding:4px 0;position:relative;zIndex:1;");
 
       for (const item of preview.items) {
         const row = document.createElement("div");
-        const bg = item.isTarget ? "rgba(52,199,89,0.1)" : "rgba(255,255,255,0.05)";
-        const op = item.isTarget ? "1" : "0.5";
-        row.setAttribute("style", `display:flex;justify-content:space-between;align-items:center;font-size:13px;padding:6px 10px;border-radius:8px;background:${bg};opacity:${op};`);
+        const bg = item.isTarget ? `${THEME.accent}10` : "rgba(255,255,255,0.03)";
+        const border = item.isTarget ? `1px solid ${THEME.accent}22` : "1px solid rgba(255,255,255,0.05)";
+        const op = item.isTarget ? "1" : "0.4";
+        row.setAttribute("style", `display:flex;justify-content:space-between;align-items:center;font-size:13px;padding:10px 14px;border-radius:12px;background:${bg};border:${border};opacity:${op};`);
 
         const nameSpan = document.createElement("span");
         nameSpan.textContent = item.name || "Unknown";
-        nameSpan.setAttribute("style", "flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-right:8px;");
+        nameSpan.setAttribute("style", "flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-right:12px;font-weight:500;");
 
         const valSpan = document.createElement("span");
         const fmtVal = item.value < 0 ? `-$${Math.abs(item.value)}` : `$${item.value}`;
         valSpan.textContent = `${fmtPercent(item.rate)}% = ${fmtVal}`;
-        const valColor = item.isTarget ? "#34C759" : "#888";
-        valSpan.setAttribute("style", `font-weight:600;flex-shrink:0;color:${valColor};`);
+        const valColor = item.isTarget ? THEME.accent : THEME.textDim;
+        valSpan.setAttribute("style", `font-weight:700;flex-shrink:0;color:${valColor};font-size:14px;`);
 
         row.append(nameSpan, valSpan);
         list.appendChild(row);
@@ -1010,23 +1046,27 @@
 
       // Total
       const totalEl = document.createElement("div");
-      totalEl.setAttribute("style", "text-align:center;font-size:15px;font-weight:700;padding:8px 0;border-top:1px solid rgba(255,255,255,0.1);flex-shrink:0;");
+      totalEl.setAttribute("style", `text-align:center;font-size:14px;font-weight:500;padding:16px 0;border-top:1px solid rgba(255,255,255,0.05);flex-shrink:0;position:relative;zIndex:1;`);
       const totalFmt = preview.total < 0 ? `-$${Math.abs(preview.total)}` : `$${preview.total}`;
-      totalEl.innerHTML = `Total: <span style="color:#34C759">${totalFmt}</span> <span style="color:#888;font-size:12px">(${preview.targetCount} items to adjust)</span>`;
+      totalEl.innerHTML = `<span style="color:${THEME.textDim};font-size:12px;text-transform:uppercase;letter-spacing:0.5px;display:block;margin-bottom:4px;">Total Commission</span><span style="color:${THEME.accent};font-weight:800;font-size:24px;">${totalFmt}</span><div style="color:${THEME.textDark};font-size:11px;margin-top:4px;">${preview.targetCount} items to adjust</div>`;
       dialog.appendChild(totalEl);
 
       // Buttons
       const btnRow = document.createElement("div");
-      btnRow.setAttribute("style", "display:flex;gap:10px;flex-shrink:0;");
+      btnRow.setAttribute("style", "display:flex;gap:12px;flex-shrink:0;position:relative;zIndex:1;");
 
       const cancelBtn = document.createElement("button");
       cancelBtn.textContent = "Cancel";
-      cancelBtn.setAttribute("style", "flex:1;padding:10px;border-radius:10px;border:1px solid rgba(255,255,255,0.2);background:transparent;color:#fff;font-size:14px;font-weight:600;cursor:pointer;");
+      cancelBtn.setAttribute("style", `flex:1;padding:14px;border-radius:12px;border:1px solid rgba(255,255,255,0.1);background:rgba(255,255,255,0.05);color:#fff;font-size:14px;font-weight:600;cursor:pointer;transition:all 0.2s;`);
+      cancelBtn.addEventListener("mouseenter", () => { cancelBtn.style.background = "rgba(255,255,255,0.1)"; });
+      cancelBtn.addEventListener("mouseleave", () => { cancelBtn.style.background = "rgba(255,255,255,0.05)"; });
       cancelBtn.addEventListener("click", () => { cleanup(); resolve(false); });
 
       const confirmBtn = document.createElement("button");
       confirmBtn.textContent = "Confirm";
-      confirmBtn.setAttribute("style", "flex:1;padding:10px;border-radius:10px;border:none;background:#34C759;color:#fff;font-size:14px;font-weight:700;cursor:pointer;");
+      confirmBtn.setAttribute("style", `flex:1.5;padding:14px;border-radius:12px;border:none;background:${THEME.textMain};color:${THEME.bgSolid};font-size:14px;font-weight:700;cursor:pointer;transition:all 0.2s;box-shadow:0 4px 15px rgba(0,0,0,0.2);`);
+      confirmBtn.addEventListener("mouseenter", () => { confirmBtn.style.background = THEME.accent; confirmBtn.style.color = "white"; confirmBtn.style.transform = "translateY(-2px)"; confirmBtn.style.boxShadow = `0 8px 25px ${THEME.accent}44`; });
+      confirmBtn.addEventListener("mouseleave", () => { confirmBtn.style.background = THEME.textMain; confirmBtn.style.color = THEME.bgSolid; confirmBtn.style.transform = "translateY(0)"; confirmBtn.style.boxShadow = "0 4px 15px rgba(0,0,0,0.2)"; });
       confirmBtn.addEventListener("click", () => { cleanup(); resolve(true); });
 
       btnRow.append(cancelBtn, confirmBtn);
@@ -1179,6 +1219,11 @@
       return;
     }
 
+    if (selectedReason === "Other" && !(selectedOtherText || "").trim()) {
+      notify("Please enter a comment when 'Other' is selected.");
+      return;
+    }
+
     // Confirmation dialog (if enabled)
     const confirmOn = localStorage.getItem(LS_KEY_CONFIRM) === "true";
     if (confirmOn) {
@@ -1318,8 +1363,9 @@
         btn.disabled = false;
         btn.style.opacity = "1";
         btn.style.cursor = "pointer";
-        btn.style.background = "white";
-        btn.style.color = "black";
+        btn.style.background = "";
+        btn.style.color = "";
+        btn.style.border = "";
       }
     } else {
       if (btn.textContent !== "Open a Sale to Adjust") {
@@ -1329,6 +1375,7 @@
         btn.style.cursor = "not-allowed";
         btn.style.background = "#444";
         btn.style.color = "#aaa";
+        btn.style.border = "2px solid transparent";
       }
       // Clear undo data when navigating away
       lastRunData = null;
@@ -1388,6 +1435,10 @@
 
   // --- SINGLE ADJUSTMENT LOGIC ---
   async function applySingleAdjustment(c, rate, noteOverride = null) {
+    if (selectedReason === "Other" && !(selectedOtherText || "").trim()) {
+      notify("Please enter a comment when 'Other' is selected.");
+      return;
+    }
     const saleTotal = getSaleTotal(c) || 0;
     const val = trunc3(saleTotal * rate);
     
@@ -1441,13 +1492,9 @@
         pill.style.background = isActive ? "rgba(52,199,89,0.15)" : "rgba(255,255,255,0.06)";
         pill.style.color = isActive ? "#34C759" : "#ccc";
       });
-      const card = row.closest('.jbh-row-info');
-      if (card) {
-        const otherWrap = card.querySelector('input[placeholder="Type your reason..."]');
-        if (otherWrap) {
-          otherWrap.parentElement.style.display = selectedReason === "Other" ? "block" : "none";
-        }
-      }
+    });
+    document.querySelectorAll('.jbh-reason-comment').forEach(input => {
+      input.placeholder = selectedReason === "Other" ? "Required when Other is selected" : "Optional";
     });
   }
 
@@ -1535,11 +1582,11 @@
             // Check for existing UI placed after the container (sibling)
             const nextEl = c.nextElementSibling;
             if (nextEl && nextEl.classList.contains('jbh-row-info')) {
-                // If UI exists and matches current data, skip
-                if (nextEl.dataset.trackingId === trackingId) {
+                // If UI exists and matches current data and has full structure (e.g. comment box), skip
+                if (nextEl.dataset.trackingId === trackingId && nextEl.querySelector('.jbh-reason-comment')) {
                     return;
                 }
-                // If UI exists but stale (wrong product/price), remove it
+                // If UI exists but stale or missing new elements, remove so we rebuild
                 nextEl.remove();
             }
 
@@ -1555,24 +1602,38 @@
             Object.assign(infoDiv.style, {
                 marginTop: "12px",
                 padding: "16px 20px",
-                background: "rgba(20, 20, 20, 0.95)",
-                backdropFilter: "blur(10px)",
-                border: "1px solid rgba(255, 255, 255, 0.1)",
-                borderRadius: "16px",
+                background: THEME.bg,
+                backdropFilter: `blur(${THEME.blur})`,
+                border: THEME.border,
+                borderRadius: THEME.radius,
                 fontSize: "13px",
-                color: "white",
+                color: THEME.textMain,
                 display: "flex",
                 flexDirection: "column",
                 gap: "14px",
                 width: "100%",
                 boxSizing: "border-box",
-                boxShadow: "0 12px 32px rgba(0, 0, 0, 0.4)",
-                fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif',
+                boxShadow: THEME.shadow,
+                fontFamily: '-apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Roboto, sans-serif',
+                position: "relative",
+                overflow: "hidden",
             });
+
+            // Noise overlay for liquid glass texture
+            const noiseOverlay = document.createElement("div");
+            Object.assign(noiseOverlay.style, {
+                position: "absolute",
+                top: "0", left: "0", right: "0", bottom: "0",
+                backgroundImage: THEME.noise,
+                opacity: THEME.noiseOpacity,
+                pointerEvents: "none",
+                zIndex: "0",
+            });
+            infoDiv.appendChild(noiseOverlay);
 
             const dispValue = trunc3(result.value);
             const formattedValue = dispValue < 0 ? `-$${Math.abs(dispValue)}` : `$${dispValue}`;
-            const valueColor = dispValue < 0 ? "#FF3B30" : "#34C759";
+            const valueColor = dispValue < 0 ? "#FF453A" : THEME.accent;
 
             // === TOP ROW: Suggested adjustment (horizontal) ===
             const topRow = document.createElement("div");
@@ -1581,17 +1642,24 @@
                 alignItems: "center",
                 justifyContent: "space-between",
                 paddingBottom: "12px",
-                borderBottom: "1px solid rgba(255,255,255,0.1)",
+                borderBottom: "1px solid rgba(255,255,255,0.05)",
+                position: "relative",
+                zIndex: "1",
             });
             const suggestLabel = document.createElement("div");
-            suggestLabel.innerHTML = `<span style="font-weight:700; font-size:14px; color:#fff;">Suggested:</span> <span style="color:${valueColor}; font-weight:700; font-size:15px;">${fmtPercent(result.rate)}% = ${formattedValue}</span>`;
+            suggestLabel.innerHTML = `<span style="font-weight:600; font-size:11px; text-transform:uppercase; letter-spacing:1px; color:${THEME.textDim};">Suggested</span><div style="color:${valueColor}; font-weight:700; font-size:16px; margin-top:2px;">${fmtPercent(result.rate)}% = ${formattedValue}</div>`;
             topRow.appendChild(suggestLabel);
             if (bundleStatus) {
                 const badge = document.createElement("span");
                 Object.assign(badge.style, {
-                    fontSize: "11px",
-                    color: "#aaa",
-                    fontStyle: "italic",
+                    fontSize: "10px",
+                    fontWeight: "600",
+                    textTransform: "uppercase",
+                    letterSpacing: "0.5px",
+                    color: THEME.textDark,
+                    background: "rgba(255, 255, 255, 0.05)",
+                    padding: "4px 8px",
+                    borderRadius: "6px",
                     whiteSpace: "nowrap",
                     marginLeft: "12px",
                 });
@@ -1605,18 +1673,20 @@
             Object.assign(reasonSection.style, {
                 display: "flex",
                 flexDirection: "column",
-                gap: "8px",
+                gap: "10px",
                 paddingBottom: "12px",
-                borderBottom: "1px solid rgba(255,255,255,0.1)",
+                borderBottom: "1px solid rgba(255,255,255,0.05)",
+                position: "relative",
+                zIndex: "1",
             });
             const reasonHeader = document.createElement("div");
             reasonHeader.textContent = "Reason";
             Object.assign(reasonHeader.style, {
-                fontSize: "11px",
+                fontSize: "10px",
                 fontWeight: "600",
-                color: "#888",
+                color: THEME.textDark,
                 textTransform: "uppercase",
-                letterSpacing: "0.5px",
+                letterSpacing: "1px",
             });
             reasonSection.appendChild(reasonHeader);
 
@@ -1625,32 +1695,8 @@
             Object.assign(pillRow.style, {
                 display: "flex",
                 flexWrap: "wrap",
-                gap: "6px",
+                gap: "8px",
             });
-
-            const otherInputWrap = document.createElement("div");
-            Object.assign(otherInputWrap.style, {
-                display: selectedReason === "Other" ? "block" : "none",
-                width: "100%",
-            });
-            const otherInput = document.createElement("input");
-            otherInput.type = "text";
-            otherInput.placeholder = "Type your reason...";
-            otherInput.value = selectedOtherText;
-            Object.assign(otherInput.style, {
-                width: "100%",
-                padding: "7px 10px",
-                border: "1px solid rgba(255,255,255,0.15)",
-                borderRadius: "8px",
-                background: "rgba(255,255,255,0.06)",
-                color: "#fff",
-                fontSize: "12px",
-                outline: "none",
-                boxSizing: "border-box",
-            });
-            otherInput.addEventListener("input", () => { selectedOtherText = otherInput.value; });
-            otherInput.addEventListener("click", (e) => e.stopPropagation());
-            otherInputWrap.appendChild(otherInput);
 
             REASON_OPTIONS.forEach(reason => {
                 const pill = document.createElement("button");
@@ -1658,27 +1704,29 @@
                 pill.dataset.reason = reason;
                 const isActive = reason === selectedReason;
                 Object.assign(pill.style, {
-                    border: isActive ? "1px solid rgba(52,199,89,0.6)" : "1px solid rgba(255,255,255,0.12)",
-                    background: isActive ? "rgba(52,199,89,0.15)" : "rgba(255,255,255,0.06)",
-                    borderRadius: "16px",
-                    padding: "5px 12px",
+                    border: isActive ? `1px solid ${THEME.accent}44` : "1px solid rgba(255,255,255,0.08)",
+                    background: isActive ? `${THEME.accent}15` : "rgba(255,255,255,0.03)",
+                    borderRadius: "20px",
+                    padding: "6px 14px",
                     cursor: "pointer",
                     fontSize: "11px",
                     fontWeight: "500",
-                    color: isActive ? "#34C759" : "#ccc",
-                    transition: "all 0.15s",
+                    color: isActive ? THEME.accent : THEME.textDim,
+                    transition: "all 0.2s cubic-bezier(0.4, 0, 0.2, 1)",
                     whiteSpace: "nowrap",
                 });
                 pill.addEventListener("mouseenter", () => {
                     if (pill.dataset.reason !== selectedReason) {
-                        pill.style.background = "rgba(255,255,255,0.1)";
-                        pill.style.borderColor = "rgba(255,255,255,0.25)";
+                        pill.style.background = "rgba(255,255,255,0.08)";
+                        pill.style.borderColor = "rgba(255,255,255,0.15)";
+                        pill.style.color = "#fff";
                     }
                 });
                 pill.addEventListener("mouseleave", () => {
                     if (pill.dataset.reason !== selectedReason) {
-                        pill.style.background = "rgba(255,255,255,0.06)";
-                        pill.style.borderColor = "rgba(255,255,255,0.12)";
+                        pill.style.background = "rgba(255,255,255,0.03)";
+                        pill.style.borderColor = "rgba(255,255,255,0.08)";
+                        pill.style.color = THEME.textDim;
                     }
                 });
                 pill.addEventListener("click", (e) => {
@@ -1691,7 +1739,60 @@
             });
 
             reasonSection.appendChild(pillRow);
-            reasonSection.appendChild(otherInputWrap);
+
+            // Comment box: always visible; optional normally, required when "Other" is selected
+            const commentWrap = document.createElement("div");
+            commentWrap.className = "jbh-comment-wrap";
+            Object.assign(commentWrap.style, {
+                width: "100%",
+                marginTop: "10px",
+                flexShrink: "0",
+                display: "block",
+                minHeight: "50px",
+            });
+            const commentLabel = document.createElement("div");
+            commentLabel.textContent = "Comment";
+            Object.assign(commentLabel.style, {
+                fontSize: "10px",
+                fontWeight: "600",
+                color: THEME.textDark,
+                textTransform: "uppercase",
+                letterSpacing: "1px",
+                marginBottom: "6px",
+            });
+            commentWrap.appendChild(commentLabel);
+            const commentInput = document.createElement("input");
+            commentInput.type = "text";
+            commentInput.className = "jbh-reason-comment";
+            commentInput.placeholder = selectedReason === "Other" ? "Required when Other is selected" : "Optional";
+            commentInput.value = selectedOtherText;
+            Object.assign(commentInput.style, {
+                width: "100%",
+                padding: "10px 12px",
+                border: "2px solid rgba(255,255,255,0.2)",
+                borderRadius: "10px",
+                background: "rgba(255,255,255,0.08)",
+                color: THEME.textMain,
+                fontSize: "13px",
+                outline: "none",
+                boxSizing: "border-box",
+                transition: "border-color 0.2s, box-shadow 0.2s",
+                minHeight: "40px",
+                display: "block",
+            });
+            commentInput.addEventListener("focus", () => {
+                commentInput.style.borderColor = THEME.accent;
+                commentInput.style.boxShadow = `0 0 0 1px ${THEME.accent}33`;
+            });
+            commentInput.addEventListener("blur", () => {
+                commentInput.style.borderColor = "rgba(255,255,255,0.2)";
+                commentInput.style.boxShadow = "none";
+            });
+            commentInput.addEventListener("input", () => { selectedOtherText = commentInput.value; });
+            commentInput.addEventListener("click", (e) => e.stopPropagation());
+            commentWrap.appendChild(commentInput);
+            reasonSection.appendChild(commentWrap);
+
             infoDiv.appendChild(reasonSection);
 
             // === MANUAL OVERRIDE SECTION ===
@@ -1699,16 +1800,18 @@
             Object.assign(overrideSection.style, {
                 display: "flex",
                 flexDirection: "column",
-                gap: "8px",
+                gap: "10px",
+                position: "relative",
+                zIndex: "1",
             });
             const overrideHeader = document.createElement("div");
             overrideHeader.textContent = "Manual Override";
             Object.assign(overrideHeader.style, {
-                fontSize: "11px",
+                fontSize: "10px",
                 fontWeight: "600",
-                color: "#888",
+                color: THEME.textDark,
                 textTransform: "uppercase",
-                letterSpacing: "0.5px",
+                letterSpacing: "1px",
             });
             overrideSection.appendChild(overrideHeader);
 
@@ -1716,7 +1819,7 @@
             Object.assign(btnRow.style, {
                 display: "grid",
                 gridTemplateColumns: "repeat(6, 1fr)",
-                gap: "6px",
+                gap: "8px",
             });
 
             const pcts = [0.002, 0.005, 0.01, 0.015, 0.02, 0.023];
@@ -1724,29 +1827,31 @@
                 const btn = document.createElement("button");
                 btn.textContent = fmtPercent(rate) + "%";
                 Object.assign(btn.style, {
-                    border: "none",
-                    background: "#333",
-                    borderRadius: "8px",
-                    padding: "8px 0",
+                    border: "1px solid rgba(255,255,255,0.05)",
+                    background: "rgba(255,255,255,0.03)",
+                    borderRadius: "10px",
+                    padding: "10px 0",
                     cursor: "pointer",
                     fontSize: "12px",
-                    fontWeight: "500",
+                    fontWeight: "600",
                     color: "#fff",
-                    transition: "all 0.15s",
+                    transition: "all 0.2s cubic-bezier(0.4, 0, 0.2, 1)",
                     textAlign: "center",
                 });
                 btn.addEventListener("mouseenter", () => {
-                    btn.style.background = "#444";
-                    btn.style.transform = "scale(1.03)";
+                    btn.style.background = "rgba(255,255,255,0.08)";
+                    btn.style.transform = "translateY(-2px)";
+                    btn.style.borderColor = "rgba(255,255,255,0.1)";
                 });
                 btn.addEventListener("mouseleave", () => {
-                    btn.style.background = "#333";
-                    btn.style.transform = "scale(1)";
+                    btn.style.background = "rgba(255,255,255,0.03)";
+                    btn.style.transform = "translateY(0)";
+                    btn.style.borderColor = "rgba(255,255,255,0.05)";
                 });
                 btn.addEventListener("click", async (e) => {
                     e.stopPropagation();
                     btn.textContent = "...";
-                    btn.style.color = "#aaa";
+                    btn.style.color = THEME.textDark;
                     btn.disabled = true;
                     await applySingleAdjustment(c, rate);
                     btn.disabled = false;
@@ -1761,25 +1866,28 @@
             const bottomControls = document.createElement("div");
             Object.assign(bottomControls.style, {
                 display: "flex",
-                gap: "6px",
+                gap: "8px",
                 alignItems: "center",
             });
 
             const customInput = document.createElement("input");
             customInput.type = "text";
-            customInput.placeholder = "Custom % (Enter)";
+            customInput.placeholder = "Custom %";
             customInput.className = "jbh-custom-input";
             Object.assign(customInput.style, {
                 flex: "1",
-                padding: "7px 10px",
-                border: "1px solid rgba(255,255,255,0.12)",
-                borderRadius: "8px",
-                background: "rgba(255,255,255,0.06)",
+                padding: "8px 12px",
+                border: "1px solid rgba(255,255,255,0.08)",
+                borderRadius: "10px",
+                background: "rgba(255,255,255,0.03)",
                 color: "#fff",
                 fontSize: "12px",
                 outline: "none",
                 boxSizing: "border-box",
+                transition: "border-color 0.2s",
             });
+            customInput.addEventListener("focus", () => { customInput.style.borderColor = THEME.accent; });
+            customInput.addEventListener("blur", () => { customInput.style.borderColor = "rgba(255,255,255,0.08)"; });
             customInput.addEventListener("keydown", async (e) => {
                 if (e.key !== "Enter") return;
                 e.preventDefault();
@@ -1805,26 +1913,30 @@
             const resetBtn = document.createElement("button");
             resetBtn.textContent = "Reset to $0";
             Object.assign(resetBtn.style, {
-                border: "none",
-                background: "rgba(255, 59, 48, 0.15)",
-                borderRadius: "8px",
-                padding: "7px 14px",
+                border: "1px solid rgba(255, 69, 58, 0.2)",
+                background: "rgba(255, 69, 58, 0.05)",
+                borderRadius: "10px",
+                padding: "8px 16px",
                 cursor: "pointer",
                 fontSize: "11px",
-                fontWeight: "600",
-                color: "#FF3B30",
-                transition: "all 0.15s",
+                fontWeight: "700",
+                color: "#FF453A",
+                transition: "all 0.2s cubic-bezier(0.4, 0, 0.2, 1)",
                 textAlign: "center",
                 whiteSpace: "nowrap",
                 flexShrink: "0",
+                textTransform: "uppercase",
+                letterSpacing: "0.5px",
             });
             resetBtn.addEventListener("mouseenter", () => {
-                resetBtn.style.background = "rgba(255, 59, 48, 0.3)";
-                resetBtn.style.transform = "scale(1.03)";
+                resetBtn.style.background = "rgba(255, 69, 58, 0.15)";
+                resetBtn.style.transform = "translateY(-2px)";
+                resetBtn.style.borderColor = "rgba(255, 69, 58, 0.4)";
             });
             resetBtn.addEventListener("mouseleave", () => {
-                resetBtn.style.background = "rgba(255, 59, 48, 0.15)";
-                resetBtn.style.transform = "scale(1)";
+                resetBtn.style.background = "rgba(255, 69, 58, 0.05)";
+                resetBtn.style.transform = "translateY(0)";
+                resetBtn.style.borderColor = "rgba(255, 69, 58, 0.2)";
             });
             resetBtn.addEventListener("click", async (e) => {
                 e.stopPropagation();
@@ -1870,16 +1982,16 @@
             z-index: 2147483647;
             display: flex;
             flex-direction: column;
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-            background: rgba(20, 20, 20, 0.95);
-            backdrop-filter: blur(10px);
-            border-radius: 16px;
-            border: 1px solid rgba(255, 255, 255, 0.1);
-            box-shadow: 0 12px 32px rgba(0, 0, 0, 0.4);
-            color: white;
+            font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Roboto, sans-serif;
+            background: ${THEME.bg};
+            backdrop-filter: blur(${THEME.blur});
+            border-radius: ${THEME.radius};
+            border: ${THEME.border};
+            box-shadow: ${THEME.shadow};
+            color: ${THEME.textMain};
             opacity: 0;
-            animation: jbh-fade-in 0.4s ease forwards;
-            min-width: 200px;
+            animation: jbh-fade-in 0.5s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+            min-width: 220px;
             min-height: 150px;
             max-width: 90vw;
             max-height: 90vh;
@@ -1887,9 +1999,21 @@
             user-select: none;
         }
 
+        #jbh-helper-wrap::before {
+            content: "";
+            position: absolute;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background-image: ${THEME.noise};
+            opacity: ${THEME.noiseOpacity};
+            pointer-events: none;
+            z-index: -1;
+        }
+
         #jbh-helper-wrap.dragging {
             cursor: grabbing !important;
-            box-shadow: 0 16px 40px rgba(0, 0, 0, 0.5);
+            box-shadow: ${THEME.shadowLift};
+            transform: scale(1.02);
+            transition: transform 0.2s, box-shadow 0.2s;
         }
 
         #jbh-helper-wrap.resizing {
@@ -1897,10 +2021,10 @@
         }
 
         .jbh-drag-handle {
-            padding: 12px 16px;
+            padding: 14px 18px;
             cursor: grab;
-            background: rgba(255, 255, 255, 0.05);
-            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+            background: rgba(255, 255, 255, 0.03);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
             display: flex;
             align-items: center;
             justify-content: space-between;
@@ -1912,66 +2036,7 @@
         }
 
         .jbh-drag-handle:hover {
-            background: rgba(255, 255, 255, 0.08);
-        }
-
-        .jbh-content {
-            padding: 16px;
-            display: flex;
-            flex-direction: column;
-            flex: 1;
-            min-height: 0;
-            overflow: hidden;
-        }
-
-        .jbh-content-scrollable {
-            flex: 1;
-            overflow-y: auto;
-            overflow-x: hidden;
-            display: flex;
-            flex-direction: column;
-            gap: 12px;
-            min-height: 0;
-            padding-right: 4px;
-        }
-
-        .jbh-content-scrollable::-webkit-scrollbar {
-            width: 6px;
-        }
-
-        .jbh-content-scrollable::-webkit-scrollbar-track {
-            background: rgba(255, 255, 255, 0.05);
-            border-radius: 3px;
-        }
-
-        .jbh-content-scrollable::-webkit-scrollbar-thumb {
-            background: rgba(255, 255, 255, 0.2);
-            border-radius: 3px;
-        }
-
-        .jbh-content-scrollable::-webkit-scrollbar-thumb:hover {
-            background: rgba(255, 255, 255, 0.3);
-        }
-
-        .jbh-button-container {
-            margin-top: 12px;
-            flex-shrink: 0;
-            padding-top: 12px;
-            border-top: 1px solid rgba(255, 255, 255, 0.1);
-        }
-
-        .jbh-resize-handle {
-            position: absolute;
-            background: transparent;
-            z-index: 10;
-        }
-
-        .jbh-resize-handle.n {
-            top: 0;
-            left: 0;
-            right: 0;
-            height: 8px;
-            cursor: ns-resize;
+            background: rgba(255, 255, 255, 0.06);
         }
 
         .jbh-resize-handle.s {
@@ -2025,148 +2090,77 @@
         .jbh-resize-handle.sw {
             bottom: 0;
             left: 0;
+            white-space: nowrap;
             width: 16px;
             height: 16px;
             cursor: nesw-resize;
         }
 
-        .jbh-resize-handle:hover {
-            background: rgba(52, 199, 89, 0.2);
-        }
-
-        @keyframes jbh-fade-in {
-            from { opacity: 0; transform: translateY(10px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-
-        .jbh-title {
-            font-size: 13px;
-            font-weight: 700;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-            color: #888;
-            flex: 1;
-        }
-
-        .jbh-drag-icon {
-            width: 16px;
-            height: 16px;
-            opacity: 0.5;
+        .jbh-content {
+            padding: 18px;
             display: flex;
-            align-items: center;
-            justify-content: center;
-            flex-shrink: 0;
-        }
-
-        .jbh-drag-icon::before {
-            content: '⋮⋮';
-            font-size: 12px;
-            line-height: 1;
-            color: #888;
-        }
-
-        .jbh-row {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            font-size: 14px;
-            font-weight: 500;
-            cursor: pointer;
-            gap: 12px;
-            min-height: 32px;
-            flex-shrink: 0;
-        }
-
-        .jbh-row span {
+            flex-direction: column;
             flex: 1;
-            min-width: 0;
+            min-height: 0;
             overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
         }
 
-        /* SWITCH */
-        .jbh-switch {
-            position: relative;
-            width: 40px;
-            height: 22px;
-            background: #444;
-            border-radius: 20px;
-            transition: background 0.3s;
-            flex-shrink: 0;
+        .jbh-content-scrollable {
+            flex: 1;
+            overflow-y: auto;
+            overflow-x: hidden;
+            display: flex;
+            flex-direction: column;
+            gap: 14px;
+            min-height: 0;
+            padding-right: 6px;
         }
-        .jbh-switch::after {
-            content: '';
-            position: absolute;
-            top: 2px;
-            left: 2px;
-            width: 18px;
-            height: 18px;
-            background: white;
-            border-radius: 50%;
-            transition: transform 0.3s cubic-bezier(0.3, 1.2, 0.2, 1);
-            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+
+        .jbh-content-scrollable::-webkit-scrollbar {
+            width: 4px;
         }
-        input:checked + .jbh-switch {
-            background: #34C759; /* Apple Green */
-        }
-        input:checked + .jbh-switch::after {
-            transform: translateX(18px);
+
+        .jbh-content-scrollable::-webkit-scrollbar-track {
+            background: transparent;
         }
         input { display: none; }
 
-        /* BUTTON */
-        #jbh-auto-btn {
-            width: 100%;
-            padding: 12px 0;
+        .jbh-content-scrollable::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.1);
             border-radius: 10px;
-            border: none;
-            background: white;
-            color: black;
-            font-size: 15px;
-            font-weight: 700;
-            cursor: pointer;
-            transition: background 0.3s ease, color 0.3s ease, transform 0.2s ease, box-shadow 0.3s ease, border-color 0.3s ease;
-            transform: translateY(0);
-            border: 2px solid transparent;
         }
 
-        #jbh-auto-btn:hover {
-            background: #34C759;
-            color: white;
-            border-color: #34C759;
-            box-shadow: 0 4px 12px rgba(52, 199, 89, 0.3);
-            transform: translateY(-2px);
+        .jbh-content-scrollable::-webkit-scrollbar-thumb:hover {
+            background: rgba(255, 255, 255, 0.2);
         }
 
-        #jbh-auto-btn:active {
-            background: #2AB04A;
-            border-color: #2AB04A;
-            transform: translateY(0);
-            box-shadow: 0 2px 6px rgba(52, 199, 89, 0.2);
-            transition: all 0.1s;
+        .jbh-button-container {
+            margin-top: 14px;
+            flex-shrink: 0;
+            padding-top: 14px;
+            border-top: 1px solid rgba(255, 255, 255, 0.05);
         }
 
-        #jbh-auto-btn.processing {
-            background: #FF9500;
-            color: white;
-            border-color: #FF9500;
-            cursor: wait;
-            animation: jbh-pulse 1.5s ease-in-out infinite;
+        .jbh-resize-handle {
+            position: absolute;
+            background: transparent;
+            border: 1px solid transparent;
+            z-index: 10;
+            transition: background 0.15s, border-color 0.15s, box-shadow 0.15s;
         }
-
+        .jbh-resize-handle:hover {
+            background: rgba(255, 255, 255, 0.12);
+            border-color: rgba(255, 255, 255, 0.25);
+            box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.2);
+        }
+        .jbh-resize-handle.n { top: 0; left: 0; right: 0; height: 8px; cursor: ns-resize; }
+        .jbh-resize-handle.s { bottom: 0; left: 0; right: 0; height: 8px; cursor: ns-resize; }
+        .jbh-resize-handle.e { top: 0; right: 0; bottom: 0; width: 8px; cursor: ew-resize; }
+        .jbh-resize-handle.w { top: 0; left: 0; bottom: 0; width: 8px; cursor: ew-resize; }
+        .jbh-resize-handle.ne { top: 0; right: 0; width: 16px; height: 16px; cursor: nesw-resize; }
         #jbh-auto-btn.processing:hover {
             background: #FF9500;
             transform: translateY(0);
-        }
-
-        @keyframes jbh-pulse {
-            0%, 100% {
-                box-shadow: 0 4px 12px rgba(255, 149, 0, 0.3);
-            }
-            50% {
-                box-shadow: 0 4px 20px rgba(255, 149, 0, 0.5);
-            }
         }
 
         /* COLLAPSED STATE */
@@ -2196,71 +2190,235 @@
             color: #fff;
         }
 
-        /* UNDO BUTTON */
-        #jbh-undo-btn {
-            width: 100%;
-            padding: 8px 0;
-            border-radius: 8px;
-            border: 1px solid rgba(255, 59, 48, 0.3);
-            background: rgba(255, 59, 48, 0.1);
-            color: #FF3B30;
-            font-size: 13px;
-            font-weight: 600;
-            cursor: pointer;
-            transition: all 0.2s;
-            margin-top: 8px;
-            display: none;
-        }
-        #jbh-undo-btn:hover {
-            background: rgba(255, 59, 48, 0.2);
-            border-color: rgba(255, 59, 48, 0.5);
-        }
-
-        /* SALE SUMMARY */
-        #jbh-sale-summary {
-            padding: 10px;
-            background: rgba(255,255,255,0.05);
-            border-radius: 10px;
-        }
-
-        /* CUSTOM RATE INPUT */
+        .jbh-resize-handle.nw { top: 0; left: 0; width: 16px; height: 16px; cursor: nwse-resize; }
+        /* CUSTOM RATE INPUT - glass */
         .jbh-custom-input {
             flex: 1;
-            background: #222;
-            border: 1px solid #444;
-            border-radius: 6px;
-            padding: 5px 8px;
-            color: #fff;
+            background: rgba(255, 255, 255, 0.05);
+            border: ${THEME.border};
+            border-radius: 10px;
+            padding: 6px 10px;
+            color: ${THEME.textMain};
             font-size: 12px;
             outline: none;
             min-width: 0;
             font-family: inherit;
+            transition: border-color 0.2s, box-shadow 0.2s;
         }
         .jbh-custom-input:focus {
-            border-color: #34C759;
+            border-color: ${THEME.accent};
+            box-shadow: 0 0 0 1px ${THEME.accent}22;
         }
         .jbh-custom-input::placeholder {
-            color: #666;
+            color: ${THEME.textDark};
+        }
+
+        .jbh-resize-handle.se { bottom: 0; right: 0; width: 16px; height: 16px; cursor: nwse-resize; }
+        .jbh-resize-handle.sw { bottom: 0; left: 0; width: 16px; height: 16px; cursor: nesw-resize; }
+
+        @keyframes jbh-fade-in {
+            from { opacity: 0; transform: translateY(15px) scale(0.98); }
+            to { opacity: 1; transform: translateY(0) scale(1); }
+        }
+
+        .jbh-title {
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: ${THEME.textDim};
+            flex: 1;
+        }
+
+        .jbh-drag-icon {
+            width: 16px;
+            height: 16px;
+            opacity: 0.3;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+        }
+
+        .jbh-drag-icon::before {
+            content: '⋮⋮';
+            font-size: 12px;
+            color: #fff;
+        }
+
+        .jbh-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            font-size: 13px;
+            font-weight: 500;
+            cursor: pointer;
+            gap: 12px;
+            min-height: 36px;
+            padding: 4px 0;
+            color: ${THEME.textMain};
+        }
+
+        .jbh-row span {
+            flex: 1;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        /* SWITCH */
+        .jbh-switch {
+            position: relative;
+            width: 36px;
+            height: 20px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 20px;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            flex-shrink: 0;
+            border: 1px solid rgba(255, 255, 255, 0.05);
+        }
+        .jbh-switch::after {
+            content: '';
+            position: absolute;
+            top: 2px;
+            left: 2px;
+            width: 14px;
+            height: 14px;
+            background: white;
+            border-radius: 50%;
+            transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+        }
+        input:checked + .jbh-switch {
+            background: ${THEME.accent};
+            border-color: rgba(0, 0, 0, 0.1);
+        }
+        input:checked + .jbh-switch::after {
+            transform: translateX(16px);
+        }
+
+        /* BUTTON */
+        #jbh-auto-btn {
+            width: 100%;
+            padding: 14px 0;
+            border-radius: 12px;
+            border: 2px solid transparent;
+            background: ${THEME.textMain};
+            color: ${THEME.bgSolid};
+            font-size: 14px;
+            font-weight: 700;
+            cursor: pointer;
+            transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+        }
+
+        #jbh-auto-btn:hover {
+            background: transparent;
+            color: white;
+            border: 2px solid white;
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
+        }
+
+        #jbh-auto-btn:active {
+            transform: translateY(0);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+        }
+
+        #jbh-auto-btn.processing {
+            background: #FF9500;
+            color: white;
+            cursor: wait;
+            animation: jbh-pulse 1.5s infinite;
+        }
+
+        @keyframes jbh-pulse {
+            0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(255, 149, 0, 0.4); }
+            50% { opacity: 0.8; box-shadow: 0 0 0 10px rgba(255, 149, 0, 0); }
+        }
+
+        /* UNDO BUTTON */
+        #jbh-undo-btn {
+            width: 100%;
+            padding: 10px 0;
+            border-radius: 10px;
+            border: 1px solid rgba(255, 59, 48, 0.2);
+            background: rgba(255, 59, 48, 0.05);
+            color: #FF453A;
+            font-size: 12px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            margin-top: 10px;
+            display: none;
+        }
+        #jbh-undo-btn:hover {
+            background: rgba(255, 59, 48, 0.15);
+            border-color: rgba(255, 59, 48, 0.4);
+        }
+
+        /* SALE SUMMARY - glass inset */
+        #jbh-sale-summary {
+            padding: 12px;
+            background: rgba(255, 255, 255, 0.04);
+            border-radius: 14px;
+            border: ${THEME.border};
+            position: relative;
+            overflow: hidden;
+        }
+        #jbh-sale-summary::before {
+            content: "";
+            position: absolute;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background-image: ${THEME.noise};
+            opacity: 0.04;
+            pointer-events: none;
+            z-index: -1;
         }
 
         /* ROW INFO CARD */
         .jbh-row-info {
-            transition: opacity 0.3s ease, background 0.3s ease;
+            background: ${THEME.bg} !important;
+            backdrop-filter: blur(${THEME.blur}) !important;
+            border: ${THEME.border} !important;
+            border-radius: ${THEME.radius} !important;
+            box-shadow: ${THEME.shadow} !important;
+            position: relative;
+            overflow: hidden;
+        }
+        .jbh-row-info::before {
+            content: "";
+            position: absolute;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background-image: ${THEME.noise};
+            opacity: ${THEME.noiseOpacity};
+            pointer-events: none;
+            z-index: -1;
         }
 
-        /* NOTIFICATIONS & TOASTS */
+        /* TOAST - liquid glass */
         .jbh-toast {
-            background: rgba(20, 20, 20, 0.9);
-            backdrop-filter: blur(8px);
-            color: white;
-            padding: 10px 16px;
-            border-radius: 24px;
-            border: 1px solid rgba(255, 255, 255, 0.15);
-            font-size: 14px;
-            font-weight: 600;
-            box-shadow: 0 8px 20px rgba(0,0,0,0.3);
-            animation: jbh-pop-in 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
-            transition: opacity 0.3s, transform 0.3s, margin 0.3s;
+            background: ${THEME.bg};
+            backdrop-filter: blur(${THEME.blur});
+            -webkit-backdrop-filter: blur(${THEME.blur});
+            color: ${THEME.textMain};
+            padding: 12px 20px;
+            border-radius: 30px;
+            border: ${THEME.border};
+            font-size: 13px;
+            font-weight: 500;
+            box-shadow: ${THEME.shadow};
+            position: relative;
+            overflow: hidden;
+        }
+        .jbh-toast::before {
+            content: "";
+            position: absolute;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background-image: ${THEME.noise};
+            opacity: ${THEME.noiseOpacity};
+            pointer-events: none;
+            z-index: -1;
         }
         .jbh-toast.hiding {
             opacity: 0;
@@ -2273,16 +2431,18 @@
             to { opacity: 1; transform: scale(1); }
         }
 
-        /* TOOLTIP */
+        /* TOOLTIP - liquid glass */
         #jbh-tooltip {
             position: fixed;
             top: 0;
             left: 0;
             transform: translateX(-10px) translateY(-50%);
-            background: rgba(0, 0, 0, 0.9);
-            color: white;
+            background: ${THEME.bg};
+            backdrop-filter: blur(${THEME.blur});
+            -webkit-backdrop-filter: blur(${THEME.blur});
+            color: ${THEME.textMain};
             padding: 12px 16px;
-            border-radius: 10px;
+            border-radius: 14px;
             font-size: 14px;
             font-weight: 500;
             line-height: 1.4;
@@ -2291,9 +2451,19 @@
             pointer-events: none;
             opacity: 0;
             transition: opacity 0.2s ease;
-            border: 1px solid rgba(255, 255, 255, 0.1);
-            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+            border: ${THEME.border};
+            box-shadow: ${THEME.shadow};
             z-index: 2147483648;
+            overflow: hidden;
+        }
+        #jbh-tooltip::before {
+            content: "";
+            position: absolute;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background-image: ${THEME.noise};
+            opacity: ${THEME.noiseOpacity};
+            pointer-events: none;
+            z-index: -1;
         }
         #jbh-tooltip::after {
             content: '';
@@ -2303,7 +2473,7 @@
             transform: translateY(-50%);
             border-width: 8px 0 8px 8px;
             border-style: solid;
-            border-color: transparent transparent transparent rgba(0, 0, 0, 0.9);
+            border-color: transparent transparent transparent ${THEME.bgSolid};
         }
         #jbh-tooltip.visible {
             opacity: 1;
@@ -2369,7 +2539,7 @@
     dragHandle.className = "jbh-drag-handle";
     const title = document.createElement("div");
     title.className = "jbh-title";
-    title.textContent = "COMMISSION HELPER";
+    title.textContent = "JB COMMISSION HELPER";
 
     // Minimize/collapse button
     const isCollapsedOnLoad = localStorage.getItem(LS_KEY_COLLAPSED) === "true";
