@@ -22,7 +22,18 @@
   let updateTimer = null;
   const LS_KEY_CONFIRM = "jbh_confirm";
   const LS_KEY_COLLAPSED = "jbh_collapsed";
+  const LS_KEY_REASON_SELECT = "jbh_reason_select";
   let lastRunData = null;
+  let selectedReason = localStorage.getItem(LS_KEY_REASON_SELECT) || "Matched Advertised Price";
+  let selectedOtherText = "";
+  const REASON_OPTIONS = [
+    "Price Match",
+    "EL & Q Under Cost",
+    "Ex-Display Under Cost",
+    "Open Sku Sale",
+    "Matched Advertised Price",
+    "Other",
+  ];
 
   function parseMoney(txt) {
     if (!txt) return 0;
@@ -792,7 +803,9 @@
     return null;
   }
 
-  async function fillAndSaveModal({ commissionValue, commentText }) {
+  async function fillAndSaveModal({ commissionValue, commentText, reasonLabel }) {
+    const reason = reasonLabel || selectedReason || "Matched Advertised Price";
+
     const modalRoot = await waitForModal();
     if (!modalRoot) return false;
 
@@ -805,12 +818,16 @@
       setReactValue(spivInput, "0");
     }
 
-    await pickReasonOption("Matched Advertised Price");
+    await pickReasonOption(reason);
 
-    if (commentText) {
+    const fullComment = reason === "Other" && selectedOtherText
+      ? (commentText ? `${selectedOtherText}\n\n${commentText}` : selectedOtherText)
+      : commentText;
+
+    if (fullComment) {
       const customTa = await waitForCustomReasonInput();
       if (customTa) {
-        setReactValue(customTa, commentText);
+        setReactValue(customTa, fullComment);
       }
     }
 
@@ -1251,6 +1268,7 @@
       const ok = await fillAndSaveModal({
         commissionValue: computed.value,
         commentText,
+        reasonLabel: selectedReason,
       });
 
       if (!ok) {
@@ -1404,7 +1422,8 @@
     await sleep(200);
     const ok = await fillAndSaveModal({
         commissionValue: val,
-        commentText
+        commentText,
+        reasonLabel: selectedReason
     });
     
     if (ok) {
@@ -1412,6 +1431,24 @@
     } else {
         notify("Failed to apply adjustment");
     }
+  }
+
+  function syncReasonPills() {
+    document.querySelectorAll('.jbh-reason-pills').forEach(row => {
+      row.querySelectorAll('button[data-reason]').forEach(pill => {
+        const isActive = pill.dataset.reason === selectedReason;
+        pill.style.border = isActive ? "1px solid rgba(52,199,89,0.6)" : "1px solid rgba(255,255,255,0.12)";
+        pill.style.background = isActive ? "rgba(52,199,89,0.15)" : "rgba(255,255,255,0.06)";
+        pill.style.color = isActive ? "#34C759" : "#ccc";
+      });
+      const card = row.closest('.jbh-row-info');
+      if (card) {
+        const otherWrap = card.querySelector('input[placeholder="Type your reason..."]');
+        if (otherWrap) {
+          otherWrap.parentElement.style.display = selectedReason === "Other" ? "block" : "none";
+        }
+      }
+    });
   }
 
   // --- INJECT INFO UI ---
@@ -1507,36 +1544,17 @@
             }
 
             // Content Building
-            const stockStr = getStockType(c) === "Q" ? "Q Stock" : "Regular Stock";
-            
-            let category = "Unknown";
-            const resultNameU = (result.name || "").toUpperCase();
-            if (/2D\s+SAMSUNG|SAMSUNG\s+GALAXY\s+S|SAMSUNG\s+S25/i.test(resultNameU) || isSamsungDevice(resultNameU)) {
-                category = "Samsung Main Product";
-            } else if (isAirPods(resultNameU)) {
-                // AirPods Pro 3, Pro 2, and AirPods 4: "Apple Primary" if alone, "Accessory" if attached to iPhone/MacBook
-                if (ctx.hasRealPrimaryProduct) {
-                    category = "Accessory";
-                } else {
-                    category = "Apple Primary";
-                }
-            } else if (isAppleProduct(resultNameU, c)) category = "Apple Primary";
-            else if (isMainNonAppleProduct(resultNameU, c)) category = "Primary (Non-Apple)";
-            else if (isAccessory(resultNameU, c)) category = "Accessory";
-            else if (isBigElectronicDevice(resultNameU)) category = "Big Device";
-            
-            let bundleStatus = "None";
+            let bundleStatus = "";
             if (ctx.appleCareSoldWithAppleAndOthers && result.multiplier === 2.5) bundleStatus = "AC Multiplier (2.5x)";
             else if (result.multiplier === 2) bundleStatus = "IPS Multiplier (2x)";
             else if (ctx.hasRealPrimaryProduct && isAirPods(result.name)) bundleStatus = "Attached (AirPods)";
 
             const infoDiv = document.createElement("div");
             infoDiv.className = "jbh-row-info";
-            // Store the tracking ID
             infoDiv.dataset.trackingId = trackingId;
             Object.assign(infoDiv.style, {
                 marginTop: "12px",
-                padding: "16px",
+                padding: "16px 20px",
                 background: "rgba(20, 20, 20, 0.95)",
                 backdropFilter: "blur(10px)",
                 border: "1px solid rgba(255, 255, 255, 0.1)",
@@ -1545,68 +1563,162 @@
                 color: "white",
                 display: "flex",
                 flexDirection: "column",
-                gap: "12px",
+                gap: "14px",
                 width: "100%",
-                maxWidth: "260px",
                 boxSizing: "border-box",
                 boxShadow: "0 12px 32px rgba(0, 0, 0, 0.4)",
                 fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif',
             });
 
-            // Calculate truncated value for display to match actual behavior
             const dispValue = trunc3(result.value);
-            // Format value: move negative sign before $ if refunded
             const formattedValue = dispValue < 0 ? `-$${Math.abs(dispValue)}` : `$${dispValue}`;
-            // Use red color for negative values (refunds), green for positive
             const valueColor = dispValue < 0 ? "#FF3B30" : "#34C759";
 
-            // Top Section: Auto Suggestion
-            const topSection = document.createElement("div");
-            topSection.className = "jbh-auto-section";
-            topSection.innerHTML = `
-                <div style="text-align:center; font-weight:700; color:#fff; font-size:14px; margin-bottom:8px; padding-bottom:8px; border-bottom:1px solid rgba(255,255,255,0.1); letter-spacing: 0.3px;">
-                    <div>Automatic Adjustment:</div>
-                    <div><span style="color:${valueColor};">${fmtPercent(result.rate)}%</span> <span style="color:#fff;">=</span> <span style="color:${valueColor};">${formattedValue}</span></div>
-                </div>
-                <div style="display:flex; flex-direction:column; align-items:center; gap:4px; font-size:12px; color:#aaa;">
-                    <span>${category} • ${stockStr}</span>
-                    <span style="font-size:11px; color:#888; font-style:italic;">${bundleStatus}</span>
-                </div>
-            `;
-            infoDiv.appendChild(topSection);
+            // === TOP ROW: Suggested adjustment (horizontal) ===
+            const topRow = document.createElement("div");
+            Object.assign(topRow.style, {
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                paddingBottom: "12px",
+                borderBottom: "1px solid rgba(255,255,255,0.1)",
+            });
+            const suggestLabel = document.createElement("div");
+            suggestLabel.innerHTML = `<span style="font-weight:700; font-size:14px; color:#fff;">Suggested:</span> <span style="color:${valueColor}; font-weight:700; font-size:15px;">${fmtPercent(result.rate)}% = ${formattedValue}</span>`;
+            topRow.appendChild(suggestLabel);
+            if (bundleStatus) {
+                const badge = document.createElement("span");
+                Object.assign(badge.style, {
+                    fontSize: "11px",
+                    color: "#aaa",
+                    fontStyle: "italic",
+                    whiteSpace: "nowrap",
+                    marginLeft: "12px",
+                });
+                badge.textContent = bundleStatus;
+                topRow.appendChild(badge);
+            }
+            infoDiv.appendChild(topRow);
 
-            // Bottom Section: Manual Controls
-            const bottomSection = document.createElement("div");
-            bottomSection.className = "jbh-manual-section";
-            Object.assign(bottomSection.style, {
-                marginTop: "4px",
-                paddingTop: "8px",
-                borderTop: "1px solid rgba(255,255,255,0.1)",
+            // === REASON SELECTOR ===
+            const reasonSection = document.createElement("div");
+            Object.assign(reasonSection.style, {
                 display: "flex",
                 flexDirection: "column",
-                gap: "8px"
+                gap: "8px",
+                paddingBottom: "12px",
+                borderBottom: "1px solid rgba(255,255,255,0.1)",
             });
-
-            const manualHeader = document.createElement("div");
-            manualHeader.textContent = "Manual Override (if incorrect)";
-            Object.assign(manualHeader.style, {
-                textAlign: "center",
+            const reasonHeader = document.createElement("div");
+            reasonHeader.textContent = "Reason";
+            Object.assign(reasonHeader.style, {
                 fontSize: "11px",
                 fontWeight: "600",
                 color: "#888",
                 textTransform: "uppercase",
-                letterSpacing: "0.5px"
+                letterSpacing: "0.5px",
             });
-            bottomSection.appendChild(manualHeader);
+            reasonSection.appendChild(reasonHeader);
+
+            const pillRow = document.createElement("div");
+            pillRow.className = "jbh-reason-pills";
+            Object.assign(pillRow.style, {
+                display: "flex",
+                flexWrap: "wrap",
+                gap: "6px",
+            });
+
+            const otherInputWrap = document.createElement("div");
+            Object.assign(otherInputWrap.style, {
+                display: selectedReason === "Other" ? "block" : "none",
+                width: "100%",
+            });
+            const otherInput = document.createElement("input");
+            otherInput.type = "text";
+            otherInput.placeholder = "Type your reason...";
+            otherInput.value = selectedOtherText;
+            Object.assign(otherInput.style, {
+                width: "100%",
+                padding: "7px 10px",
+                border: "1px solid rgba(255,255,255,0.15)",
+                borderRadius: "8px",
+                background: "rgba(255,255,255,0.06)",
+                color: "#fff",
+                fontSize: "12px",
+                outline: "none",
+                boxSizing: "border-box",
+            });
+            otherInput.addEventListener("input", () => { selectedOtherText = otherInput.value; });
+            otherInput.addEventListener("click", (e) => e.stopPropagation());
+            otherInputWrap.appendChild(otherInput);
+
+            REASON_OPTIONS.forEach(reason => {
+                const pill = document.createElement("button");
+                pill.textContent = reason;
+                pill.dataset.reason = reason;
+                const isActive = reason === selectedReason;
+                Object.assign(pill.style, {
+                    border: isActive ? "1px solid rgba(52,199,89,0.6)" : "1px solid rgba(255,255,255,0.12)",
+                    background: isActive ? "rgba(52,199,89,0.15)" : "rgba(255,255,255,0.06)",
+                    borderRadius: "16px",
+                    padding: "5px 12px",
+                    cursor: "pointer",
+                    fontSize: "11px",
+                    fontWeight: "500",
+                    color: isActive ? "#34C759" : "#ccc",
+                    transition: "all 0.15s",
+                    whiteSpace: "nowrap",
+                });
+                pill.addEventListener("mouseenter", () => {
+                    if (pill.dataset.reason !== selectedReason) {
+                        pill.style.background = "rgba(255,255,255,0.1)";
+                        pill.style.borderColor = "rgba(255,255,255,0.25)";
+                    }
+                });
+                pill.addEventListener("mouseleave", () => {
+                    if (pill.dataset.reason !== selectedReason) {
+                        pill.style.background = "rgba(255,255,255,0.06)";
+                        pill.style.borderColor = "rgba(255,255,255,0.12)";
+                    }
+                });
+                pill.addEventListener("click", (e) => {
+                    e.stopPropagation();
+                    selectedReason = reason;
+                    localStorage.setItem(LS_KEY_REASON_SELECT, reason);
+                    syncReasonPills();
+                });
+                pillRow.appendChild(pill);
+            });
+
+            reasonSection.appendChild(pillRow);
+            reasonSection.appendChild(otherInputWrap);
+            infoDiv.appendChild(reasonSection);
+
+            // === MANUAL OVERRIDE SECTION ===
+            const overrideSection = document.createElement("div");
+            Object.assign(overrideSection.style, {
+                display: "flex",
+                flexDirection: "column",
+                gap: "8px",
+            });
+            const overrideHeader = document.createElement("div");
+            overrideHeader.textContent = "Manual Override";
+            Object.assign(overrideHeader.style, {
+                fontSize: "11px",
+                fontWeight: "600",
+                color: "#888",
+                textTransform: "uppercase",
+                letterSpacing: "0.5px",
+            });
+            overrideSection.appendChild(overrideHeader);
 
             const btnRow = document.createElement("div");
             Object.assign(btnRow.style, {
                 display: "grid",
-                gridTemplateColumns: "repeat(3, 1fr)",
-                gap: "6px"
+                gridTemplateColumns: "repeat(6, 1fr)",
+                gap: "6px",
             });
 
-            // Quick Percent Buttons
             const pcts = [0.002, 0.005, 0.01, 0.015, 0.02, 0.023];
             pcts.forEach(rate => {
                 const btn = document.createElement("button");
@@ -1614,25 +1726,23 @@
                 Object.assign(btn.style, {
                     border: "none",
                     background: "#333",
-                    borderRadius: "6px",
-                    padding: "6px 0",
+                    borderRadius: "8px",
+                    padding: "8px 0",
                     cursor: "pointer",
                     fontSize: "12px",
                     fontWeight: "500",
                     color: "#fff",
-                    transition: "all 0.2s",
-                    textAlign: "center"
+                    transition: "all 0.15s",
+                    textAlign: "center",
                 });
                 btn.addEventListener("mouseenter", () => {
                     btn.style.background = "#444";
-                    btn.style.transform = "scale(1.02)";
+                    btn.style.transform = "scale(1.03)";
                 });
                 btn.addEventListener("mouseleave", () => {
                     btn.style.background = "#333";
                     btn.style.transform = "scale(1)";
                 });
-                
-                // Click Action
                 btn.addEventListener("click", async (e) => {
                     e.stopPropagation();
                     btn.textContent = "...";
@@ -1643,54 +1753,33 @@
                     btn.style.color = "#fff";
                     btn.textContent = fmtPercent(rate) + "%";
                 });
-
                 btnRow.appendChild(btn);
             });
+            overrideSection.appendChild(btnRow);
 
-            bottomSection.appendChild(btnRow);
+            // Bottom controls: Custom input + Reset
+            const bottomControls = document.createElement("div");
+            Object.assign(bottomControls.style, {
+                display: "flex",
+                gap: "6px",
+                alignItems: "center",
+            });
 
-            // Reset to $0 button
-            const resetBtn = document.createElement("button");
-            resetBtn.textContent = "Reset to $0";
-            Object.assign(resetBtn.style, {
-                border: "none",
-                background: "rgba(255, 59, 48, 0.15)",
-                borderRadius: "6px",
-                padding: "6px 0",
-                cursor: "pointer",
-                fontSize: "11px",
-                fontWeight: "600",
-                color: "#FF3B30",
-                transition: "all 0.2s",
-                textAlign: "center",
-                width: "100%",
-                marginTop: "2px"
-            });
-            resetBtn.addEventListener("mouseenter", () => {
-                resetBtn.style.background = "rgba(255, 59, 48, 0.3)";
-                resetBtn.style.transform = "scale(1.02)";
-            });
-            resetBtn.addEventListener("mouseleave", () => {
-                resetBtn.style.background = "rgba(255, 59, 48, 0.15)";
-                resetBtn.style.transform = "scale(1)";
-            });
-            resetBtn.addEventListener("click", async (e) => {
-                e.stopPropagation();
-                resetBtn.textContent = "...";
-                resetBtn.disabled = true;
-                await applySingleAdjustment(c, 0, "Reset to $0");
-                resetBtn.disabled = false;
-                resetBtn.textContent = "Reset to $0";
-            });
-            bottomSection.appendChild(resetBtn);
-
-            // Custom rate input (Enter to apply)
             const customInput = document.createElement("input");
             customInput.type = "text";
-            customInput.placeholder = "Custom % (Enter to apply)";
+            customInput.placeholder = "Custom % (Enter)";
             customInput.className = "jbh-custom-input";
-            Object.assign(customInput.style, { width: "100%", marginTop: "4px" });
-
+            Object.assign(customInput.style, {
+                flex: "1",
+                padding: "7px 10px",
+                border: "1px solid rgba(255,255,255,0.12)",
+                borderRadius: "8px",
+                background: "rgba(255,255,255,0.06)",
+                color: "#fff",
+                fontSize: "12px",
+                outline: "none",
+                boxSizing: "border-box",
+            });
             customInput.addEventListener("keydown", async (e) => {
                 if (e.key !== "Enter") return;
                 e.preventDefault();
@@ -1711,10 +1800,44 @@
                 customInput.value = "";
             });
             customInput.addEventListener("click", (e) => e.stopPropagation());
+            bottomControls.appendChild(customInput);
 
-            bottomSection.appendChild(customInput);
+            const resetBtn = document.createElement("button");
+            resetBtn.textContent = "Reset to $0";
+            Object.assign(resetBtn.style, {
+                border: "none",
+                background: "rgba(255, 59, 48, 0.15)",
+                borderRadius: "8px",
+                padding: "7px 14px",
+                cursor: "pointer",
+                fontSize: "11px",
+                fontWeight: "600",
+                color: "#FF3B30",
+                transition: "all 0.15s",
+                textAlign: "center",
+                whiteSpace: "nowrap",
+                flexShrink: "0",
+            });
+            resetBtn.addEventListener("mouseenter", () => {
+                resetBtn.style.background = "rgba(255, 59, 48, 0.3)";
+                resetBtn.style.transform = "scale(1.03)";
+            });
+            resetBtn.addEventListener("mouseleave", () => {
+                resetBtn.style.background = "rgba(255, 59, 48, 0.15)";
+                resetBtn.style.transform = "scale(1)";
+            });
+            resetBtn.addEventListener("click", async (e) => {
+                e.stopPropagation();
+                resetBtn.textContent = "...";
+                resetBtn.disabled = true;
+                await applySingleAdjustment(c, 0, "Reset to $0");
+                resetBtn.disabled = false;
+                resetBtn.textContent = "Reset to $0";
+            });
+            bottomControls.appendChild(resetBtn);
 
-            infoDiv.appendChild(bottomSection);
+            overrideSection.appendChild(bottomControls);
+            infoDiv.appendChild(overrideSection);
 
             // Injection Point: Insert as sibling AFTER the product container
             // This ensures the info card is never clipped by the container's
@@ -2120,35 +2243,9 @@
             color: #666;
         }
 
-        /* ROW INFO HOVER EFFECTS */
+        /* ROW INFO CARD */
         .jbh-row-info {
             transition: opacity 0.3s ease, background 0.3s ease;
-        }
-
-        .jbh-row-info .jbh-auto-section {
-            transition: opacity 0.3s ease;
-            opacity: 1;
-        }
-
-        /* When hovering auto section, fade entire widget including background */
-        .jbh-row-info:has(.jbh-auto-section:hover) {
-            opacity: 0.2;
-        }
-
-        /* Keep manual section fully visible even when widget is faded */
-        .jbh-row-info:has(.jbh-auto-section:hover) .jbh-manual-section {
-            opacity: 1;
-            pointer-events: auto;
-        }
-
-        .jbh-row-info .jbh-manual-section {
-            opacity: 1;
-            pointer-events: auto;
-        }
-
-        /* When hovering manual section, keep widget at full opacity */
-        .jbh-row-info:has(.jbh-manual-section:hover) {
-            opacity: 1;
         }
 
         /* NOTIFICATIONS & TOASTS */
