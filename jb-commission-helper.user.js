@@ -830,12 +830,9 @@
 
     const commInput = document.querySelector("#commission-value-input");
     if (!commInput) return false;
-    setReactValue(commInput, String(commissionValue));
 
-    const spivInput = document.querySelector("#spiv-value-input");
-    if (spivInput && spivInput.value === "") {
-      setReactValue(spivInput, "0");
-    }
+    setReactValue(commInput, String(commissionValue));
+    await sleep(120); // allow any reactive UI recalculation/clearing to occur
 
     await pickReasonOption(reason);
 
