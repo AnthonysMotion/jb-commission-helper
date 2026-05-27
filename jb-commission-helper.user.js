@@ -2173,9 +2173,9 @@
             flex-direction: column;
             align-items: center;
             justify-content: center;
-            width: 44px;
-            height: 44px;
-            min-height: 44px;
+            width: 56px;
+            height: 56px;
+            min-height: 56px;
             padding: 0;
             flex-shrink: 0;
             cursor: pointer;
@@ -2183,15 +2183,15 @@
             color: rgba(255, 255, 255, 0.5);
             background: #000000;
             backdrop-filter: blur(${THEME.blur});
-            border-radius: 8px;
+            border-radius: 10px;
             border: 1px solid rgba(255, 255, 255, 0.1);
             box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.06);
             transition: color 0.22s ease, border-color 0.22s ease, background 0.22s ease,
                 box-shadow 0.22s ease, transform 0.18s ease;
         }
         #jbh-calc-launcher svg {
-            width: 22px;
-            height: 22px;
+            width: 28px;
+            height: 28px;
             flex-shrink: 0;
             display: block;
             filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.35));
