@@ -3,7 +3,7 @@
 A browser userscript that automatically calculates and adjusts commission values for retail sales on the JB Hi-Fi commission management system. This tool streamlines the commission adjustment process by intelligently categorizing products and applying the correct commission rates based on company policies.
 
 
-![Version](https://img.shields.io/badge/version-8.2-blue.svg)
+![Version](https://img.shields.io/badge/version-8.2.1-blue.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 
 ## Features
@@ -85,6 +85,7 @@ The script implements the following commission structure:
 ### AppleCare
 - **Rate**: 5% commission
 - **Always applies**: Regardless of other products in the sale
+- **Title detection**: Recognises names containing `APPLECARE`, `APPLECARE+`, `APPLE CARE`, `AC+` / `AC +`, `CARE+`, or standalone `AC` when paired with Apple product / care wording (e.g. iPhone, iPad, coverage) so missed AppleCare lines still get the 5% suggestion and **Run Adjustment** value when commission is $0 (with **Edit $0 Commissions Only** enabled).
 
 ### Q Stock (Clearance Items)
 

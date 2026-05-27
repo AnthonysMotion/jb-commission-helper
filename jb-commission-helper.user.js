@@ -2,7 +2,7 @@
 // ==UserScript==
 // @name         JB Commission Helper
 // @namespace    jb-commission-helper
-// @version      8.2
+// @version      8.2.1
 // @description  automatically does ur jb commmissions for u :) anthonythach.com
 // @match        https://jbh-all-commissions-ui-webapp-prod.azurewebsites.net/*
 // @run-at       document-idle
@@ -417,8 +417,22 @@
     );
   }
 
+  /** AppleCare / AppleCare+ / AC+ style products — used for 5% commission. */
   function isAppleCare(nameUpper) {
-    return /APPLECARE|APPLE CARE|CARE\+/i.test(nameUpper);
+    const n = nameUpper.replace(/\s+/g, " ").trim();
+    if (!n) return false;
+    if (/APPLECARE\+?|APPLE\s*CARE|CARE\+/i.test(n)) return true;
+    if (/AC\s*\+|AC\+/i.test(n)) return true;
+    // Lone "AC" only with Apple / care context (avoids "AC adapter" style accessories)
+    if (
+      /\bAC\b/.test(n) &&
+      /\b(IPHONE|IPAD|MACBOOK|IMAC|MAC\s+MINI|APPLE\s+WATCH|\bWATCH\b|AIRPODS|APPLE\s+TV|HOMEPOD|COVERAGE|PROTECTION|INSURANCE|DEVICE)\b/i.test(
+        n
+      )
+    ) {
+      return true;
+    }
+    return false;
   }
 
   function isAirPods(nameUpper) {
