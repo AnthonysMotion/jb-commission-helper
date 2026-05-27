@@ -2,7 +2,7 @@
 // ==UserScript==
 // @name         JB Commission Helper
 // @namespace    jb-commission-helper
-// @version      8.1
+// @version      8.2
 // @description  automatically does ur jb commmissions for u :) anthonythach.com
 // @match        https://jbh-all-commissions-ui-webapp-prod.azurewebsites.net/*
 // @run-at       document-idle
@@ -23,6 +23,7 @@
   const LS_KEY_CONFIRM = "jbh_confirm";
   const LS_KEY_COLLAPSED = "jbh_collapsed";
   const LS_KEY_REASON_SELECT = "jbh_reason_select";
+  const LS_KEY_CALC_OPEN = "jbh_calc_panel_open";
   let lastRunData = null;
   let selectedReason = localStorage.getItem(LS_KEY_REASON_SELECT) || "Matched Advertised Price";
   let selectedOtherText = "";
@@ -79,6 +80,118 @@
     return String(p)
       .replace(/(\.\d*?[1-9])0+$/, "$1")
       .replace(/\.0$/, "");
+  }
+
+  /** Round to cents for calculator display. */
+  function formatCalcMoney(n) {
+    if (!Number.isFinite(n)) return "—";
+    const neg = n < 0;
+    const abs = Math.abs(n);
+    const cents = Math.round(abs * 100) / 100;
+    const s = cents.toFixed(2);
+    return (neg ? "-$" : "$") + s;
+  }
+
+  /**
+   * Evaluate a currency-style expression: + - * /, parentheses, optional $ and commas.
+   * A percentage on the right of + - * / applies to the usual meaning (e.g. $50-20% → 50 − 10 = 40).
+   */
+  function evalCurrencyExpr(raw) {
+    const cleaned = String(raw || "").trim();
+    if (!cleaned) {
+      return { ok: false, error: "Enter an expression." };
+    }
+    const s = cleaned.replace(/,/g, "").replace(/\s+/g, "");
+    let i = 0;
+    const peek = () => s[i] || "";
+
+    function parseNumberToken() {
+      if (peek() === "$") i++;
+      const start = i;
+      if (!/\d|\./.test(peek())) {
+        throw new Error(`Expected number at position ${i + 1}`);
+      }
+      while (/\d|\./.test(peek())) i++;
+      const n = parseFloat(s.slice(start, i));
+      if (Number.isNaN(n)) throw new Error("Invalid number");
+      let pctLiteral = false;
+      if (peek() === "%") {
+        pctLiteral = true;
+        i++;
+      }
+      return { val: n, pctLiteral };
+    }
+
+    function parsePrimary() {
+      if (peek() === "(") {
+        i++;
+        const v = parseAddSub();
+        if (peek() !== ")") throw new Error("Missing )");
+        i++;
+        return { val: v, pctLiteral: false };
+      }
+      return parseNumberToken();
+    }
+
+    function parseUnary() {
+      if (peek() === "-") {
+        i++;
+        const x = parseUnary();
+        return { val: -toMulValue(x), pctLiteral: false };
+      }
+      return parsePrimary();
+    }
+
+    function toMulValue(node) {
+      if (node.pctLiteral) return node.val / 100;
+      return node.val;
+    }
+
+    function parseMulDiv() {
+      let left = parseUnary();
+      while (peek() === "*" || peek() === "/") {
+        const op = peek();
+        i++;
+        const right = parseUnary();
+        const L = toMulValue(left);
+        const R = toMulValue(right);
+        if (op === "/" && R === 0) throw new Error("Division by zero");
+        const val = op === "*" ? L * R : L / R;
+        left = { val, pctLiteral: false };
+      }
+      return left;
+    }
+
+    function parseAddSub() {
+      let acc = parseMulDiv();
+      let accVal = acc.pctLiteral ? acc.val / 100 : acc.val;
+      while (peek() === "+" || peek() === "-") {
+        const op = peek();
+        i++;
+        const right = parseMulDiv();
+        if (right.pctLiteral) {
+          const p = right.val / 100;
+          accVal = op === "+" ? accVal + accVal * p : accVal - accVal * p;
+        } else {
+          const r = toMulValue(right);
+          accVal = op === "+" ? accVal + r : accVal - r;
+        }
+      }
+      return accVal;
+    }
+
+    try {
+      const result = parseAddSub();
+      if (i < s.length) {
+        return { ok: false, error: `Unexpected "${peek()}"` };
+      }
+      if (!Number.isFinite(result)) {
+        return { ok: false, error: "Invalid result." };
+      }
+      return { ok: true, value: result };
+    } catch (e) {
+      return { ok: false, error: e.message || "Invalid expression." };
+    }
   }
 
   // --- DOM TRAVERSAL ---
@@ -1818,11 +1931,11 @@
             const btnRow = document.createElement("div");
             Object.assign(btnRow.style, {
                 display: "grid",
-                gridTemplateColumns: "repeat(6, 1fr)",
+                gridTemplateColumns: "repeat(7, minmax(0, 1fr))",
                 gap: "8px",
             });
 
-            const pcts = [0.002, 0.005, 0.01, 0.015, 0.02, 0.023];
+            const pcts = [0.002, 0.005, 0.01, 0.015, 0.02, 0.023, 0.05];
             pcts.forEach(rate => {
                 const btn = document.createElement("button");
                 btn.textContent = fmtPercent(rate) + "%";
@@ -1965,7 +2078,7 @@
   }
 
   function addUIIfMissing() {
-    if (document.getElementById("jbh-helper-wrap")) {
+    if (document.getElementById("jbh-dock")) {
         updateUIState();
         return;
     }
@@ -1975,22 +2088,33 @@
       const style = document.createElement("style");
       style.id = "jbh-helper-styles";
       style.textContent = `
-        #jbh-helper-wrap {
+        #jbh-dock {
             position: fixed;
             right: 20px;
             bottom: 20px;
             z-index: 2147483647;
             display: flex;
-            flex-direction: column;
+            flex-direction: row;
+            align-items: flex-end;
+            gap: 10px;
             font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Roboto, sans-serif;
+            user-select: none;
+            opacity: 0;
+            animation: jbh-fade-in 0.5s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+        }
+
+        #jbh-helper-wrap {
+            position: relative;
+            display: flex;
+            flex-direction: column;
+            flex: 0 0 auto;
+            font-family: inherit;
             background: ${THEME.bg};
             backdrop-filter: blur(${THEME.blur});
             border-radius: ${THEME.radius};
             border: ${THEME.border};
             box-shadow: ${THEME.shadow};
             color: ${THEME.textMain};
-            opacity: 0;
-            animation: jbh-fade-in 0.5s cubic-bezier(0.16, 1, 0.3, 1) forwards;
             min-width: 220px;
             min-height: 150px;
             max-width: 90vw;
@@ -2009,7 +2133,7 @@
             z-index: -1;
         }
 
-        #jbh-helper-wrap.dragging {
+        #jbh-dock.dragging #jbh-helper-wrap {
             cursor: grabbing !important;
             box-shadow: ${THEME.shadowLift};
             transform: scale(1.02);
@@ -2018,6 +2142,183 @@
 
         #jbh-helper-wrap.resizing {
             cursor: nwse-resize !important;
+        }
+
+        #jbh-calc-wrap {
+            display: flex;
+            flex-direction: column;
+            width: 216px;
+            flex-shrink: 0;
+            background: ${THEME.bg};
+            backdrop-filter: blur(${THEME.blur});
+            border-radius: ${THEME.radius};
+            border: ${THEME.border};
+            box-shadow: ${THEME.shadow};
+            color: ${THEME.textMain};
+            overflow: hidden;
+            position: relative;
+        }
+        #jbh-calc-wrap::before {
+            content: "";
+            position: absolute;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background-image: ${THEME.noise};
+            opacity: ${THEME.noiseOpacity};
+            pointer-events: none;
+            z-index: 0;
+        }
+        #jbh-calc-wrap > * {
+            position: relative;
+            z-index: 1;
+        }
+        #jbh-calc-launcher {
+            display: none;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            width: 44px;
+            height: 44px;
+            min-height: 44px;
+            padding: 0;
+            flex-shrink: 0;
+            cursor: pointer;
+            font-family: inherit;
+            color: rgba(255, 255, 255, 0.5);
+            background: #000000;
+            backdrop-filter: blur(${THEME.blur});
+            border-radius: 8px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+            transition: color 0.22s ease, border-color 0.22s ease, background 0.22s ease,
+                box-shadow 0.22s ease, transform 0.18s ease;
+        }
+        #jbh-calc-launcher svg {
+            width: 22px;
+            height: 22px;
+            flex-shrink: 0;
+            display: block;
+            filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.35));
+            transition: filter 0.22s ease, transform 0.18s ease;
+        }
+        #jbh-calc-launcher:hover {
+            color: ${THEME.accent};
+            background: linear-gradient(
+                160deg,
+                rgba(52, 199, 89, 0.14) 0%,
+                rgba(52, 199, 89, 0.05) 45%,
+                rgba(255, 255, 255, 0.04) 100%
+            );
+            border-color: rgba(52, 199, 89, 0.45);
+            box-shadow:
+                0 0 0 1px rgba(52, 199, 89, 0.25),
+                0 6px 22px rgba(52, 199, 89, 0.12),
+                0 12px 28px rgba(0, 0, 0, 0.35),
+                inset 0 1px 0 rgba(255, 255, 255, 0.08);
+            transform: translateY(-1px);
+        }
+        #jbh-calc-launcher:hover svg {
+            filter: drop-shadow(0 0 6px rgba(52, 199, 89, 0.45));
+        }
+        #jbh-calc-launcher:active {
+            transform: translateY(0);
+            background: #0a0a0a;
+            box-shadow:
+                0 0 0 1px rgba(52, 199, 89, 0.2),
+                0 2px 10px rgba(0, 0, 0, 0.5),
+                inset 0 1px 2px rgba(0, 0, 0, 0.35);
+        }
+        .jbh-calc-head {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 10px 12px;
+            border-bottom: 1px solid rgba(255,255,255,0.06);
+            flex-shrink: 0;
+        }
+        .jbh-calc-title {
+            font-size: 10px;
+            font-weight: 600;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+            color: ${THEME.textDim};
+        }
+        .jbh-calc-close {
+            background: none;
+            border: none;
+            color: ${THEME.textDim};
+            cursor: pointer;
+            font-size: 16px;
+            line-height: 1;
+            padding: 2px 6px;
+            border-radius: 8px;
+            transition: color 0.2s, background 0.2s;
+        }
+        .jbh-calc-close:hover {
+            color: #fff;
+            background: rgba(255,255,255,0.08);
+        }
+        #jbh-calc-result {
+            width: 100%;
+            box-sizing: border-box;
+            padding: 8px 12px;
+            font-size: 18px;
+            font-weight: 700;
+            color: ${THEME.accent};
+            background: rgba(0,0,0,0.2);
+            border: none;
+            border-bottom: 1px solid rgba(255,255,255,0.06);
+            font-variant-numeric: tabular-nums;
+        }
+        #jbh-calc-expr {
+            width: 100%;
+            box-sizing: border-box;
+            padding: 10px 12px;
+            font-size: 14px;
+            font-weight: 500;
+            color: ${THEME.textMain};
+            background: rgba(255,255,255,0.05);
+            border: none;
+            border-bottom: 1px solid rgba(255,255,255,0.06);
+            outline: none;
+            font-variant-numeric: tabular-nums;
+        }
+        #jbh-calc-expr:focus {
+            box-shadow: inset 0 0 0 1px ${THEME.accent}44;
+        }
+        .jbh-calc-keys {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 6px;
+            padding: 10px;
+        }
+        .jbh-calc-keys button {
+            padding: 10px 0;
+            font-size: 14px;
+            font-weight: 600;
+            border: 1px solid rgba(255,255,255,0.08);
+            border-radius: 10px;
+            background: rgba(255,255,255,0.05);
+            color: #fff;
+            cursor: pointer;
+            transition: background 0.15s, transform 0.1s;
+            font-family: inherit;
+        }
+        .jbh-calc-keys button:hover {
+            background: rgba(255,255,255,0.1);
+        }
+        .jbh-calc-keys button:active {
+            transform: scale(0.96);
+        }
+        .jbh-calc-keys .jbh-calc-wide {
+            grid-column: span 2;
+        }
+        #jbh-helper-wrap .jbh-row input[type="checkbox"] {
+            position: absolute;
+            opacity: 0;
+            width: 0;
+            height: 0;
+            margin: 0;
+            pointer-events: none;
         }
 
         .jbh-drag-handle {
@@ -2123,7 +2424,6 @@
         .jbh-content-scrollable::-webkit-scrollbar-track {
             background: transparent;
         }
-        input { display: none; }
 
         .jbh-content-scrollable::-webkit-scrollbar-thumb {
             background: rgba(255, 255, 255, 0.1);
@@ -2483,12 +2783,15 @@
     }
 
     // --- BUILD UI ---
+    const dock = document.createElement("div");
+    dock.id = "jbh-dock";
+
     const wrap = document.createElement("div");
     wrap.id = "jbh-helper-wrap";
 
-    // Load saved position and size (with bounds checking)
     const savedPos = localStorage.getItem("jbh-wrap-position");
     const savedSize = localStorage.getItem("jbh-wrap-size");
+    let dockHasSavedPosition = false;
     if (savedPos) {
       try {
         const pos = JSON.parse(savedPos);
@@ -2497,10 +2800,11 @@
         if (!isNaN(left) && !isNaN(top) &&
             left >= 0 && left < window.innerWidth - 50 &&
             top >= 0 && top < window.innerHeight - 50) {
-          wrap.style.left = pos.left;
-          wrap.style.top = pos.top;
-          wrap.style.right = "auto";
-          wrap.style.bottom = "auto";
+          dock.style.left = pos.left;
+          dock.style.top = pos.top;
+          dock.style.right = "auto";
+          dock.style.bottom = "auto";
+          dockHasSavedPosition = true;
         } else {
           localStorage.removeItem("jbh-wrap-position");
         }
@@ -2508,6 +2812,11 @@
         localStorage.removeItem("jbh-wrap-position");
       }
     }
+    if (!dockHasSavedPosition) {
+      dock.style.right = "20px";
+      dock.style.bottom = "20px";
+    }
+
     if (savedSize) {
       try {
         const size = JSON.parse(savedSize);
@@ -2525,6 +2834,157 @@
     } else {
       wrap.style.width = "220px";
     }
+
+    const calcWrap = document.createElement("div");
+    calcWrap.id = "jbh-calc-wrap";
+
+    const calcHead = document.createElement("div");
+    calcHead.className = "jbh-calc-head";
+    const calcTitle = document.createElement("div");
+    calcTitle.className = "jbh-calc-title";
+    calcTitle.textContent = "Calculator";
+    const calcClose = document.createElement("button");
+    calcClose.type = "button";
+    calcClose.className = "jbh-calc-close";
+    calcClose.textContent = "\u2715";
+    calcClose.title = "Hide calculator";
+    calcHead.append(calcTitle, calcClose);
+
+    const resultInput = document.createElement("input");
+    resultInput.type = "text";
+    resultInput.id = "jbh-calc-result";
+    resultInput.readOnly = true;
+    resultInput.value = "$0.00";
+    resultInput.setAttribute("aria-label", "Calculator result");
+
+    const exprInput = document.createElement("input");
+    exprInput.type = "text";
+    exprInput.id = "jbh-calc-expr";
+    exprInput.setAttribute("autocomplete", "off");
+    exprInput.setAttribute("spellcheck", "false");
+    exprInput.placeholder = "e.g. $50 - 20% or 12.5 * 4";
+    exprInput.setAttribute("aria-label", "Calculator expression");
+
+    const keyGrid = document.createElement("div");
+    keyGrid.className = "jbh-calc-keys";
+
+    function runCalcEval() {
+      const out = evalCurrencyExpr(exprInput.value);
+      if (out.ok) {
+        resultInput.value = formatCalcMoney(out.value);
+      } else {
+        resultInput.value = out.error;
+      }
+    }
+
+    function appendCalcKey(ch) {
+      exprInput.focus();
+      const start = exprInput.selectionStart ?? exprInput.value.length;
+      const end = exprInput.selectionEnd ?? exprInput.value.length;
+      const v = exprInput.value;
+      exprInput.value = v.slice(0, start) + ch + v.slice(end);
+      const pos = start + ch.length;
+      exprInput.setSelectionRange(pos, pos);
+    }
+
+    function mkCalcBtn(label, onClick, wide) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.textContent = label;
+      if (wide) b.classList.add("jbh-calc-wide");
+      b.addEventListener("click", (ev) => {
+        ev.preventDefault();
+        onClick();
+      });
+      return b;
+    }
+
+    keyGrid.append(
+      mkCalcBtn("C", () => {
+        exprInput.value = "";
+        resultInput.value = "$0.00";
+      }),
+      mkCalcBtn("\u232b", () => {
+        const start = exprInput.selectionStart ?? exprInput.value.length;
+        const end = exprInput.selectionEnd ?? exprInput.value.length;
+        if (start !== end) {
+          exprInput.value = exprInput.value.slice(0, start) + exprInput.value.slice(end);
+          exprInput.setSelectionRange(start, start);
+        } else if (start > 0) {
+          exprInput.value = exprInput.value.slice(0, start - 1) + exprInput.value.slice(end);
+          exprInput.setSelectionRange(start - 1, start - 1);
+        }
+      }),
+      mkCalcBtn("(", () => appendCalcKey("(")),
+      mkCalcBtn(")", () => appendCalcKey(")")),
+      mkCalcBtn("7", () => appendCalcKey("7")),
+      mkCalcBtn("8", () => appendCalcKey("8")),
+      mkCalcBtn("9", () => appendCalcKey("9")),
+      mkCalcBtn("\u00f7", () => appendCalcKey("/")),
+      mkCalcBtn("4", () => appendCalcKey("4")),
+      mkCalcBtn("5", () => appendCalcKey("5")),
+      mkCalcBtn("6", () => appendCalcKey("6")),
+      mkCalcBtn("\u00d7", () => appendCalcKey("*")),
+      mkCalcBtn("1", () => appendCalcKey("1")),
+      mkCalcBtn("2", () => appendCalcKey("2")),
+      mkCalcBtn("3", () => appendCalcKey("3")),
+      mkCalcBtn("\u2212", () => appendCalcKey("-")),
+      mkCalcBtn("0", () => appendCalcKey("0")),
+      mkCalcBtn(".", () => appendCalcKey(".")),
+      mkCalcBtn("%", () => appendCalcKey("%")),
+      mkCalcBtn("+", () => appendCalcKey("+")),
+      mkCalcBtn("$", () => appendCalcKey("$")),
+      mkCalcBtn("=", () => runCalcEval(), true)
+    );
+
+    exprInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        runCalcEval();
+      }
+    });
+
+    calcWrap.append(calcHead, resultInput, exprInput, keyGrid);
+
+    const launcher = document.createElement("button");
+    launcher.type = "button";
+    launcher.id = "jbh-calc-launcher";
+    launcher.setAttribute("aria-label", "Open calculator");
+    launcher.title = "Open calculator";
+    /* Handheld calculator: bezel + LCD + 3×3 keypad (inherits currentColor) */
+    launcher.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <rect x="2.75" y="1.5" width="18.5" height="21" rx="2.75" stroke="currentColor" stroke-width="1.35" stroke-linejoin="round"/>
+      <rect x="4.75" y="3.75" width="14.5" height="5.25" rx="1" fill="currentColor" fill-opacity="0.18" stroke="currentColor" stroke-width="0.85" stroke-opacity="0.35"/>
+      <rect x="5.25" y="4.35" width="13.5" height="1.35" rx="0.35" fill="currentColor" fill-opacity="0.12"/>
+      <g fill="currentColor" fill-opacity="0.88">
+        <rect x="4.85" y="11.15" width="3.15" height="2.45" rx="0.45"/>
+        <rect x="10.425" y="11.15" width="3.15" height="2.45" rx="0.45"/>
+        <rect x="16" y="11.15" width="3.15" height="2.45" rx="0.45"/>
+        <rect x="4.85" y="14.55" width="3.15" height="2.45" rx="0.45"/>
+        <rect x="10.425" y="14.55" width="3.15" height="2.45" rx="0.45"/>
+        <rect x="16" y="14.55" width="3.15" height="2.45" rx="0.45"/>
+        <rect x="4.85" y="17.95" width="3.15" height="2.45" rx="0.45"/>
+        <rect x="10.425" y="17.95" width="3.15" height="2.45" rx="0.45"/>
+        <rect x="16" y="17.95" width="3.15" height="2.45" rx="0.45"/>
+      </g>
+    </svg>`;
+
+    function syncCalcVisibility() {
+      const open = localStorage.getItem(LS_KEY_CALC_OPEN) === "true";
+      calcWrap.style.display = open ? "flex" : "none";
+      launcher.style.display = open ? "none" : "flex";
+    }
+    calcClose.addEventListener("click", (e) => {
+      e.preventDefault();
+      localStorage.setItem(LS_KEY_CALC_OPEN, "false");
+      syncCalcVisibility();
+    });
+    launcher.addEventListener("click", (e) => {
+      e.preventDefault();
+      localStorage.setItem(LS_KEY_CALC_OPEN, "true");
+      syncCalcVisibility();
+      exprInput.focus();
+    });
 
     // Shared Tooltip Element (append to body to avoid overflow clipping)
     let tooltip = document.getElementById("jbh-tooltip");
@@ -2665,12 +3125,13 @@
     let initialTop = 0;
 
     dragHandle.addEventListener("mousedown", (e) => {
-      if (e.target.closest('.jbh-resize-handle')) return;
+      if (e.target.closest(".jbh-resize-handle")) return;
+      if (e.target.closest(".jbh-minimize-btn")) return;
       isDragging = true;
-      wrap.classList.add("dragging");
+      dock.classList.add("dragging");
       dragStartX = e.clientX;
       dragStartY = e.clientY;
-      const rect = wrap.getBoundingClientRect();
+      const rect = dock.getBoundingClientRect();
       initialLeft = rect.left;
       initialTop = rect.top;
       e.preventDefault();
@@ -2682,24 +3143,22 @@
         const deltaY = e.clientY - dragStartY;
         const newLeft = initialLeft + deltaX;
         const newTop = initialTop + deltaY;
-        
-        // Keep within viewport bounds
-        const maxLeft = window.innerWidth - wrap.offsetWidth;
-        const maxTop = window.innerHeight - wrap.offsetHeight;
-        
-        wrap.style.left = `${Math.max(0, Math.min(newLeft, maxLeft))}px`;
-        wrap.style.top = `${Math.max(0, Math.min(newTop, maxTop))}px`;
-        wrap.style.right = "auto";
-        wrap.style.bottom = "auto";
+
+        const maxLeft = window.innerWidth - dock.offsetWidth;
+        const maxTop = window.innerHeight - dock.offsetHeight;
+
+        dock.style.left = `${Math.max(0, Math.min(newLeft, maxLeft))}px`;
+        dock.style.top = `${Math.max(0, Math.min(newTop, maxTop))}px`;
+        dock.style.right = "auto";
+        dock.style.bottom = "auto";
       }
     });
 
     document.addEventListener("mouseup", () => {
       if (isDragging) {
         isDragging = false;
-        wrap.classList.remove("dragging");
-        // Save position
-        const rect = wrap.getBoundingClientRect();
+        dock.classList.remove("dragging");
+        const rect = dock.getBoundingClientRect();
         localStorage.setItem("jbh-wrap-position", JSON.stringify({
           left: `${rect.left}px`,
           top: `${rect.top}px`
@@ -2808,7 +3267,11 @@
       }
     });
 
-    document.body.appendChild(wrap);
+    dock.appendChild(calcWrap);
+    dock.appendChild(launcher);
+    dock.appendChild(wrap);
+    syncCalcVisibility();
+    document.body.appendChild(dock);
     updateUIState();
   }
 

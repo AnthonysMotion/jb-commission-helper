@@ -3,7 +3,7 @@
 A browser userscript that automatically calculates and adjusts commission values for retail sales on the JB Hi-Fi commission management system. This tool streamlines the commission adjustment process by intelligently categorizing products and applying the correct commission rates based on company policies.
 
 
-![Version](https://img.shields.io/badge/version-7.4-blue.svg)
+![Version](https://img.shields.io/badge/version-8.2-blue.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 
 ## Features
@@ -13,7 +13,8 @@ A browser userscript that automatically calculates and adjusts commission values
 - 📊 **Real-time UI Integration** - Displays suggested commission adjustments directly on the sales overview page
 - ⚡ **One-Click Adjustment** - Apply adjustments to all eligible items with a single button click
 - 🎨 **Modern Glassmorphism UI** - Sleek, modern interface that matches the commission system's design
-- 🔧 **Manual Override Options** - Quick percentage buttons (0.2%, 0.5%, 1%, 1.5%, 2%, 2.3%) for manual adjustments
+- 🔧 **Manual Override Options** - Quick percentage buttons (0.2%, 0.5%, 1%, 1.5%, 2%, 2.3%, 5%) for manual adjustments
+- 🧮 **Side Calculator** - Optional currency calculator to the left of the control panel (supports expressions like `$50 - 20%`)
 - 📝 **Detailed Notes** - Automatically generates appropriate notes and comments for each adjustment
 - 🔄 **Context-Aware Logic** - Handles complex scenarios like product attaches, multipliers, and dynamic product classification
 
@@ -59,7 +60,7 @@ Each product on the Sale Overview page will display an information box in the to
 
 - **Automatic Adjustment**: The suggested commission rate and value
 - **Product Details**: Category, stock type, and bundle status
-- **Manual Percentage Buttons**: Quick buttons to apply specific percentages (0.2%, 0.5%, 1%, 1.5%, 2%, 2.3%)
+- **Manual Percentage Buttons**: Quick buttons to apply specific percentages (0.2%, 0.5%, 1%, 1.5%, 2%, 2.3%, 5%)
 
 Click any percentage button to automatically apply that rate to the specific product.
 
@@ -142,8 +143,8 @@ The script automatically categorizes products into:
 ## UI Components
 
 ### Control Panel
-- **Location**: Fixed position, bottom-right corner
-- **Features**: Toggle switches, main adjustment button
+- **Location**: Fixed position, bottom-right corner (draggable dock: calculator to the left when open, main panel on the right)
+- **Features**: Toggle switches, main adjustment button; optional currency calculator (open via the **calculator icon** to the left of the panel, close with **×** in the calculator header; state saved in localStorage)
 - **Styling**: Dark glassmorphism theme with blur effects
 
 ### Product Info Box
