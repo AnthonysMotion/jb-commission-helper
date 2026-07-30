@@ -23,10 +23,11 @@
   const LS_KEY_CONFIRM = "jbh_confirm";
   const LS_KEY_COLLAPSED = "jbh_collapsed";
   const LS_KEY_REASON_SELECT = "jbh_reason_select";
+  const LS_KEY_REASON_OTHER_TEXT = "jbh_reason_other_text";
   const LS_KEY_CALC_OPEN = "jbh_calc_panel_open";
   let lastRunData = null;
   let selectedReason = localStorage.getItem(LS_KEY_REASON_SELECT) || "Matched Advertised Price";
-  let selectedOtherText = "";
+  let selectedOtherText = localStorage.getItem(LS_KEY_REASON_OTHER_TEXT) || "";
   const REASON_OPTIONS = [
     "Price Match",
     "EL & Q Under Cost",
@@ -1619,6 +1620,9 @@
     });
     document.querySelectorAll('.jbh-reason-comment').forEach(input => {
       input.placeholder = selectedReason === "Other" ? "Required when Other is selected" : "Optional";
+      if (input !== document.activeElement && input.value !== selectedOtherText) {
+        input.value = selectedOtherText;
+      }
     });
   }
 
@@ -1912,7 +1916,11 @@
                 commentInput.style.borderColor = "rgba(255,255,255,0.2)";
                 commentInput.style.boxShadow = "none";
             });
-            commentInput.addEventListener("input", () => { selectedOtherText = commentInput.value; });
+            commentInput.addEventListener("input", () => {
+                selectedOtherText = commentInput.value;
+                localStorage.setItem(LS_KEY_REASON_OTHER_TEXT, selectedOtherText);
+                syncReasonPills();
+            });
             commentInput.addEventListener("click", (e) => e.stopPropagation());
             commentWrap.appendChild(commentInput);
             reasonSection.appendChild(commentWrap);
