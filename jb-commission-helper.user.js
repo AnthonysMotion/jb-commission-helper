@@ -597,11 +597,11 @@
     let accessoryItem = isAccessory(nameU, container);
 
     // Dynamic AirPods logic:
-    // - AirPods sold alone (saleItemCount === 1) = 0.2% (treated as main product)
+    // - AirPods sold alone (saleItemCount === 1) = 0.5% (treated as main product, no-attach rate)
     // - AirPods sold with other items (saleItemCount > 1) = 0.5% (treated as accessory, regardless of what it's sold with)
     if (isItemAirPods) {
       if (ctx.saleItemCount === 1) {
-        // AirPods sold alone = main product (0.2%)
+        // AirPods sold alone = main product (0.5%)
         appleItem = true;
         accessoryItem = false;
       } else {
@@ -627,7 +627,7 @@
       };
     }
 
-    // 1.5. AirPods sold alone = 0.2% (before Q Stock check)
+    // 1.5. AirPods sold alone = 0.5% (before Q Stock check)
     // This must happen before any other logic that might classify AirPods differently
     // Check if AirPods is the only item in the sale (sold alone)
     // Use both isItemAirPods check and direct name check for robustness
@@ -637,12 +637,12 @@
       // Also check qty === 1 to ensure it's a single unit
       if (ctx.saleItemCount === 1 && qty === 1) {
         return {
-          value: saleTotal * 0.002,
-          rate: 0.002,
-          baseRate: 0.002,
+          value: saleTotal * 0.005,
+          rate: 0.005,
+          baseRate: 0.005,
           multiplier: 1,
           label: "Solo Apple (AirPods)",
-          note: "Main Product with no attach 0.2%",
+          note: "Main Product with no attach 0.5%",
           name: nameRaw,
         };
       }
@@ -680,17 +680,17 @@
     // 3. Primary Products Logic (Phones, Tablets, Cameras, Computers)
     if (appleItem || isMainNonAppleProduct(nameU, container)) {
       // Rule: Any Primary Product sold by itself = 0.2%
-      // Special handling for AirPods: ensure solo AirPods gets 0.2%
+      // Special handling for AirPods: solo AirPods get 0.5% (not the usual 0.2% no-attach rate)
       // Use both isItemAirPods check and direct name check for robustness
       const isAirPodsProduct = isItemAirPods || /AIRPODS/i.test(nameU);
       if (isAirPodsProduct && ctx.saleItemCount === 1 && qty === 1) {
         return {
-          value: saleTotal * 0.002,
-          rate: 0.002,
-          baseRate: 0.002,
+          value: saleTotal * 0.005,
+          rate: 0.005,
+          baseRate: 0.005,
           multiplier: 1,
           label: "Solo Apple (AirPods)",
-          note: "Main Product with no attach 0.2%",
+          note: "Main Product with no attach 0.5%",
           name: nameRaw,
         };
       }
