@@ -2,7 +2,7 @@
 // ==UserScript==
 // @name         JB Commission Helper
 // @namespace    jb-commission-helper
-// @version      8.2.1
+// @version      8.2.2
 // @description  automatically does ur jb commmissions for u :) anthonythach.com
 // @match        https://jbh-all-commissions-ui-webapp-prod.azurewebsites.net/*
 // @run-at       document-idle
@@ -25,6 +25,12 @@
   const LS_KEY_REASON_SELECT = "jbh_reason_select";
   const LS_KEY_REASON_OTHER_TEXT = "jbh_reason_other_text";
   const LS_KEY_CALC_OPEN = "jbh_calc_panel_open";
+  /** Missing key → defaultValue. Confirm + $0-only default ON for safer first runs. */
+  function lsFlag(key, defaultValue = false) {
+    const raw = localStorage.getItem(key);
+    if (raw === null) return defaultValue;
+    return raw === "true";
+  }
   let lastRunData = null;
   let selectedReason = localStorage.getItem(LS_KEY_REASON_SELECT) || "Matched Advertised Price";
   let selectedOtherText = localStorage.getItem(LS_KEY_REASON_OTHER_TEXT) || "";
@@ -1003,6 +1009,28 @@
     return computed;
   }
 
+  /** Clamp + trunc3 — same value Run Adjustment writes. */
+  function finalizeCommission(computedRaw, container) {
+    if (!computedRaw) return null;
+    const saleTotal = getSaleTotal(container) || 0;
+    const originalComm = getOriginalComm(container);
+    let computed = clampToOriginalIfLower(computedRaw, originalComm, saleTotal);
+    const truncatedValue = trunc3(computed.value);
+    if (truncatedValue !== computed.value) {
+      computed = {
+        ...computed,
+        value: truncatedValue,
+        rate: saleTotal > 0 ? truncatedValue / saleTotal : computed.rate,
+      };
+    }
+    return computed;
+  }
+
+  function formatSignedMoney(n) {
+    if (n == null || Number.isNaN(n)) return "$0";
+    return n < 0 ? `-$${Math.abs(n)}` : `$${n}`;
+  }
+
   // --- SALE PREVIEW (shared by summary + confirmation) ---
   function computeSalePreview() {
     const containers = getProductContainers();
@@ -1040,27 +1068,21 @@
       ctx.appleCareSoldWithAppleAndOthers = true;
     }
 
-    const onlyZeroOn = localStorage.getItem(LS_KEY_ONLY_ZERO) === "true";
+    const onlyZeroOn = lsFlag(LS_KEY_ONLY_ZERO, true);
     const targets = onlyZeroOn
       ? containers.filter((c) => getOriginalComm(c) === 0)
       : containers;
 
     const items = [];
     let total = 0;
+    let targetTotal = 0;
 
     for (const c of containers) {
-      const computedRaw = computeCommission(c, ctx);
-      if (!computedRaw) continue;
+      const computed = finalizeCommission(computeCommission(c, ctx), c);
+      if (!computed) continue;
 
       const saleTotal = getSaleTotal(c) || 0;
       const originalComm = getOriginalComm(c);
-      let computed = clampToOriginalIfLower(computedRaw, originalComm, saleTotal);
-
-      const truncatedValue = trunc3(computed.value);
-      if (truncatedValue !== computed.value) {
-        computed = { ...computed, value: truncatedValue };
-      }
-
       const isTarget = targets.includes(c);
       items.push({
         name: computed.name,
@@ -1072,9 +1094,16 @@
         keptOriginal: computed.keptOriginal
       });
       total += computed.value;
+      if (isTarget) targetTotal += computed.value;
     }
 
-    return { items, total: trunc3(total), targetCount: targets.length, totalCount: containers.length };
+    return {
+      items,
+      total: trunc3(total),
+      targetTotal: trunc3(targetTotal),
+      targetCount: targets.length,
+      totalCount: containers.length,
+    };
   }
 
   function showConfirmation(preview) {
@@ -1159,8 +1188,10 @@
         nameSpan.setAttribute("style", "flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-right:12px;font-weight:500;");
 
         const valSpan = document.createElement("span");
-        const fmtVal = item.value < 0 ? `-$${Math.abs(item.value)}` : `$${item.value}`;
-        valSpan.textContent = `${fmtPercent(item.rate)}% = ${fmtVal}`;
+        const fmtVal = formatSignedMoney(item.value);
+        valSpan.textContent = item.keptOriginal
+          ? `${fmtPercent(item.rate)}% = ${fmtVal} · kept`
+          : `${fmtPercent(item.rate)}% = ${fmtVal}`;
         const valColor = item.isTarget ? THEME.accent : THEME.textDim;
         valSpan.setAttribute("style", `font-weight:700;flex-shrink:0;color:${valColor};font-size:14px;`);
 
@@ -1169,11 +1200,16 @@
       }
       dialog.appendChild(list);
 
-      // Total
+      // Total — "to write" is targetTotal; full sale preview when some lines are skipped
       const totalEl = document.createElement("div");
       totalEl.setAttribute("style", `text-align:center;font-size:14px;font-weight:500;padding:16px 0;border-top:1px solid rgba(255,255,255,0.05);flex-shrink:0;position:relative;zIndex:1;`);
-      const totalFmt = preview.total < 0 ? `-$${Math.abs(preview.total)}` : `$${preview.total}`;
-      totalEl.innerHTML = `<span style="color:${THEME.textDim};font-size:12px;text-transform:uppercase;letter-spacing:0.5px;display:block;margin-bottom:4px;">Total Commission</span><span style="color:${THEME.accent};font-weight:800;font-size:24px;">${totalFmt}</span><div style="color:${THEME.textDark};font-size:11px;margin-top:4px;">${preview.targetCount} items to adjust</div>`;
+      const writeFmt = formatSignedMoney(preview.targetTotal);
+      const skipped = preview.totalCount - preview.targetCount;
+      let totalHtml = `<span style="color:${THEME.textDim};font-size:12px;text-transform:uppercase;letter-spacing:0.5px;display:block;margin-bottom:4px;">Total to write</span><span style="color:${THEME.accent};font-weight:800;font-size:24px;">${writeFmt}</span><div style="color:${THEME.textDark};font-size:11px;margin-top:4px;">${preview.targetCount} items to adjust</div>`;
+      if (skipped > 0) {
+        totalHtml += `<div style="color:${THEME.textDark};font-size:11px;margin-top:6px;">Sale preview ${formatSignedMoney(preview.total)} · ${skipped} unchanged</div>`;
+      }
+      totalEl.innerHTML = totalHtml;
       dialog.appendChild(totalEl);
 
       // Buttons
@@ -1334,7 +1370,7 @@
         ctx.appleCareSoldWithAppleAndOthers = true;
     }
 
-    const onlyZeroOn = localStorage.getItem(LS_KEY_ONLY_ZERO) === "true";
+    const onlyZeroOn = lsFlag(LS_KEY_ONLY_ZERO, true);
     const targets = onlyZeroOn
       ? containers.filter((c) => getOriginalComm(c) === 0)
       : containers;
@@ -1350,7 +1386,7 @@
     }
 
     // Confirmation dialog (if enabled)
-    const confirmOn = localStorage.getItem(LS_KEY_CONFIRM) === "true";
+    const confirmOn = lsFlag(LS_KEY_CONFIRM, true);
     if (confirmOn) {
       const preview = computeSalePreview();
       if (!preview) return;
@@ -1371,30 +1407,19 @@
 
     notify(`Adjusting ${targets.length} items...`);
 
-    const calcOn = localStorage.getItem(LS_KEY_CALC) === "true";
-    const reasonOn = localStorage.getItem(LS_KEY_REASON) === "true";
+    const calcOn = lsFlag(LS_KEY_CALC);
+    const reasonOn = lsFlag(LS_KEY_REASON);
 
     for (let i = 0; i < targets.length; i++) {
       const c = targets[i];
       const btn = getAdjustButton(c);
       if (!btn) continue;
 
-      const computedRaw = computeCommission(c, ctx);
-      if (!computedRaw) continue;
+      const computed = finalizeCommission(computeCommission(c, ctx), c);
+      if (!computed) continue;
 
       const saleTotal = getSaleTotal(c) || 0;
       const originalComm = getOriginalComm(c);
-
-      let computed = clampToOriginalIfLower(computedRaw, originalComm, saleTotal);
-
-      const truncatedValue = trunc3(computed.value);
-      if (truncatedValue !== computed.value) {
-        computed = {
-          ...computed,
-          value: truncatedValue,
-          rate: saleTotal > 0 ? truncatedValue / saleTotal : computed.rate,
-        };
-      }
 
       let commentText = "";
 
@@ -1540,19 +1565,24 @@
     for (const item of preview.items) {
       const rawName = item.name || "Unknown";
       const name = rawName.length > 25 ? rawName.substring(0, 22) + "..." : rawName;
-      const fmtVal = item.value < 0 ? `-$${Math.abs(item.value)}` : `$${item.value}`;
+      const fmtVal = formatSignedMoney(item.value);
       const color = item.isTarget ? "#34C759" : "#666";
       const opacity = item.isTarget ? "1" : "0.6";
+      const kept = item.keptOriginal ? " · kept" : "";
       html += `<div style="display:flex; justify-content:space-between; font-size:11px; padding:2px 0; opacity:${opacity};">`;
       html += `<span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1; margin-right:6px; color:#ccc;">${name}</span>`;
-      html += `<span style="flex-shrink:0; color:${color}; font-weight:600;">${fmtPercent(item.rate)}% = ${fmtVal}</span>`;
+      html += `<span style="flex-shrink:0; color:${color}; font-weight:600;">${fmtPercent(item.rate)}% = ${fmtVal}${kept}</span>`;
       html += '</div>';
     }
 
-    const totalFmt = preview.total < 0 ? `-$${Math.abs(preview.total)}` : `$${preview.total}`;
+    const writeFmt = formatSignedMoney(preview.targetTotal);
+    const skipped = preview.totalCount - preview.targetCount;
     html += `<div style="margin-top:6px; padding-top:6px; border-top:1px solid rgba(255,255,255,0.1); text-align:center; font-size:12px; font-weight:700;">`;
-    html += `Total: <span style="color:#34C759">${totalFmt}</span>`;
+    html += `To write: <span style="color:#34C759">${writeFmt}</span>`;
     html += ` <span style="color:#888; font-weight:400; font-size:11px;">(${preview.targetCount} to adjust)</span>`;
+    if (skipped > 0) {
+      html += `<div style="color:#888; font-weight:400; font-size:11px; margin-top:4px;">Sale preview ${formatSignedMoney(preview.total)} · ${skipped} unchanged</div>`;
+    }
     html += '</div>';
 
     summaryEl.innerHTML = html;
@@ -1573,8 +1603,8 @@
         return;
     }
 
-    const calcOn = localStorage.getItem(LS_KEY_CALC) === "true";
-    const reasonOn = localStorage.getItem(LS_KEY_REASON) === "true";
+    const calcOn = lsFlag(LS_KEY_CALC);
+    const reasonOn = lsFlag(LS_KEY_REASON);
 
     let commentText = "";
     if (noteOverride) {
@@ -1680,9 +1710,9 @@
     // This allows us to preserve matching UI elements while cleaning up stale ones
     const currentTrackingIds = new Set();
     containers.forEach((c) => {
-      const result = computeCommission(c, ctx);
+      const result = finalizeCommission(computeCommission(c, ctx), c);
       if (result) {
-        const trackingId = `${result.name}|${result.rate}|${result.value}`;
+        const trackingId = `${result.name}|${result.rate}|${result.value}|${result.keptOriginal ? 1 : 0}`;
         currentTrackingIds.add(trackingId);
       }
     });
@@ -1702,10 +1732,10 @@
 
     try {
         containers.forEach((c) => {
-            const result = computeCommission(c, ctx);
+            const result = finalizeCommission(computeCommission(c, ctx), c);
             if (!result) return;
 
-            const trackingId = `${result.name}|${result.rate}|${result.value}`;
+            const trackingId = `${result.name}|${result.rate}|${result.value}|${result.keptOriginal ? 1 : 0}`;
 
             // Check for existing UI placed after the container (sibling)
             const nextEl = c.nextElementSibling;
@@ -1759,8 +1789,8 @@
             });
             infoDiv.appendChild(noiseOverlay);
 
-            const dispValue = trunc3(result.value);
-            const formattedValue = dispValue < 0 ? `-$${Math.abs(dispValue)}` : `$${dispValue}`;
+            const dispValue = result.value;
+            const formattedValue = formatSignedMoney(dispValue);
             const valueColor = dispValue < 0 ? "#FF453A" : THEME.accent;
 
             // === TOP ROW: Suggested adjustment (horizontal) ===
@@ -1777,23 +1807,33 @@
             const suggestLabel = document.createElement("div");
             suggestLabel.innerHTML = `<span style="font-weight:600; font-size:11px; text-transform:uppercase; letter-spacing:1px; color:${THEME.textDim};">Suggested</span><div style="color:${valueColor}; font-weight:700; font-size:16px; margin-top:2px;">${fmtPercent(result.rate)}% = ${formattedValue}</div>`;
             topRow.appendChild(suggestLabel);
-            if (bundleStatus) {
+            const badgeWrap = document.createElement("div");
+            Object.assign(badgeWrap.style, {
+                display: "flex",
+                flexWrap: "wrap",
+                gap: "6px",
+                justifyContent: "flex-end",
+                marginLeft: "12px",
+            });
+            const addBadge = (text, warn) => {
                 const badge = document.createElement("span");
                 Object.assign(badge.style, {
                     fontSize: "10px",
                     fontWeight: "600",
                     textTransform: "uppercase",
                     letterSpacing: "0.5px",
-                    color: THEME.textDark,
-                    background: "rgba(255, 255, 255, 0.05)",
+                    color: warn ? "#FF9F0A" : THEME.textDark,
+                    background: warn ? "rgba(255, 159, 10, 0.12)" : "rgba(255, 255, 255, 0.05)",
                     padding: "4px 8px",
                     borderRadius: "6px",
                     whiteSpace: "nowrap",
-                    marginLeft: "12px",
                 });
-                badge.textContent = bundleStatus;
-                topRow.appendChild(badge);
-            }
+                badge.textContent = text;
+                badgeWrap.appendChild(badge);
+            };
+            if (result.keptOriginal) addBadge("Kept original", true);
+            if (bundleStatus) addBadge(bundleStatus, false);
+            if (badgeWrap.childNodes.length) topRow.appendChild(badgeWrap);
             infoDiv.appendChild(topRow);
 
             // === REASON SELECTOR ===
@@ -2989,7 +3029,7 @@
     </svg>`;
 
     function syncCalcVisibility() {
-      const open = localStorage.getItem(LS_KEY_CALC_OPEN) === "true";
+      const open = lsFlag(LS_KEY_CALC_OPEN);
       calcWrap.style.display = open ? "flex" : "none";
       launcher.style.display = open ? "none" : "flex";
     }
@@ -3021,7 +3061,7 @@
     title.textContent = "JB COMMISSION HELPER";
 
     // Minimize/collapse button
-    const isCollapsedOnLoad = localStorage.getItem(LS_KEY_COLLAPSED) === "true";
+    const isCollapsedOnLoad = lsFlag(LS_KEY_COLLAPSED);
     const minimizeBtn = document.createElement("button");
     minimizeBtn.className = "jbh-minimize-btn";
     minimizeBtn.textContent = isCollapsedOnLoad ? "+" : "\u2212";
@@ -3049,7 +3089,7 @@
     wrap.appendChild(content);
 
     // Helper to create toggle row
-    const createToggle = (key, labelText, tooltipText) => {
+    const createToggle = (key, labelText, tooltipText, defaultOn = false) => {
         const label = document.createElement("label");
         label.className = "jbh-row";
         label.style.position = "relative"; 
@@ -3059,7 +3099,7 @@
         
         const input = document.createElement("input");
         input.type = "checkbox";
-        input.checked = localStorage.getItem(key) === "true";
+        input.checked = lsFlag(key, defaultOn);
         input.addEventListener("change", () => {
             localStorage.setItem(key, input.checked ? "true" : "false");
         });
@@ -3104,10 +3144,10 @@
     summary.style.display = "none";
     scrollableContent.appendChild(summary);
     
-    scrollableContent.appendChild(createToggle(LS_KEY_ONLY_ZERO, "Edit $0 Commissions Only", "Only adjust products sold with $0 commission. \n\nUseful for fixing missed commissions without overwriting the existing commission values."));
+    scrollableContent.appendChild(createToggle(LS_KEY_ONLY_ZERO, "Edit $0 Commissions Only", "Only adjust products sold with $0 commission. \n\nOn by default so existing commissions are not overwritten. Turn off to adjust every line.", true));
     scrollableContent.appendChild(createToggle(LS_KEY_CALC, "Add Formula/Calculation", "Add the math formula used to the reason/comment field. \n\n(e.g., 0.5% * $1000 = $5.00)"));
     scrollableContent.appendChild(createToggle(LS_KEY_REASON, "Add Reason", "Add the explanation note to the reason/comment field. \n\n(e.g., 'IPS Multiplier', 'Main Product with attach/AC')"));
-    scrollableContent.appendChild(createToggle(LS_KEY_CONFIRM, "Confirm Before Running", "Show a confirmation dialog with a preview of all adjustments before applying them."));
+    scrollableContent.appendChild(createToggle(LS_KEY_CONFIRM, "Confirm Before Running", "Show a confirmation dialog with a preview of all adjustments before applying them. \n\nOn by default.", true));
     
     content.appendChild(scrollableContent);
 

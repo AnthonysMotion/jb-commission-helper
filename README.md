@@ -3,7 +3,7 @@
 A browser userscript that automatically calculates and adjusts commission values for retail sales on the JB Hi-Fi commission management system. This tool streamlines the commission adjustment process by intelligently categorizing products and applying the correct commission rates based on company policies.
 
 
-![Version](https://img.shields.io/badge/version-8.2.1-blue.svg)
+![Version](https://img.shields.io/badge/version-8.2.2-blue.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 
 ## Features
@@ -48,11 +48,14 @@ The script will automatically activate when you visit the commission system webs
 1. Navigate to a **Sale Overview** page
 2. The script will display a floating control panel in the bottom-right corner
 3. Configure your preferences using the toggles:
-   - **Edit $0 Only**: Only adjust items with $0 commission
-   - **Add Calc**: Include calculation formulas in comments
+   - **Edit $0 Commissions Only** (on by default): Only adjust items with $0 commission
+   - **Add Formula/Calculation**: Include calculation formulas in comments
    - **Add Reason**: Include explanation notes in comments
+   - **Confirm Before Running** (on by default): Preview every line before applying
 4. Click **"Run Adjustment"** to automatically adjust all eligible items
-5. Review the notifications that appear at the bottom of the screen
+5. Review the confirmation dialog (if enabled) and the notifications that appear at the bottom of the screen
+
+Suggested values never go below an existing commission greater than $0 (shown as **kept original**). Sale preview and the confirm dialog show **To write** (lines that will be saved) separately from the full sale preview total when some lines are skipped.
 
 ### Manual Adjustment
 
@@ -140,6 +143,7 @@ The script automatically categorizes products into:
 ### Data Persistence
 - Settings are stored in browser localStorage
 - Preferences persist across browser sessions
+- **Edit $0 Commissions Only** and **Confirm Before Running** default on until you change them (missing keys are treated as enabled)
 
 ## UI Components
 
