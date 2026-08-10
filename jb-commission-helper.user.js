@@ -2,7 +2,7 @@
 // ==UserScript==
 // @name         JB Commission Helper
 // @namespace    jb-commission-helper
-// @version      8.2.2
+// @version      8.4.10
 // @description  automatically does ur jb commmissions for u :) anthonythach.com
 // @match        https://jbh-all-commissions-ui-webapp-prod.azurewebsites.net/*
 // @run-at       document-idle
@@ -18,20 +18,26 @@
   const LS_KEY_CALC = "jbh_give_calc";
   const LS_KEY_REASON = "jbh_give_reason";
   const LS_KEY_ONLY_ZERO = "jbh_only_zero";
-  let obs = null;
-  let updateTimer = null;
   const LS_KEY_CONFIRM = "jbh_confirm";
   const LS_KEY_COLLAPSED = "jbh_collapsed";
   const LS_KEY_REASON_SELECT = "jbh_reason_select";
   const LS_KEY_REASON_OTHER_TEXT = "jbh_reason_other_text";
-  const LS_KEY_CALC_OPEN = "jbh_calc_panel_open";
-  /** Missing key → defaultValue. Confirm + $0-only default ON for safer first runs. */
+  const LS_KEY_EFFICIENCY = "jbh_efficiency";
+  let obs = null;
+  let updateTimer = null;
+  let lastRunData = null;
+  let runBusy = false;
+  let effPosListening = false;
+  let effClusterLocked = false;
+  let effLockTimer = null;
+
+  // Missing key → defaultValue ($0-only + confirm default on)
   function lsFlag(key, defaultValue = false) {
     const raw = localStorage.getItem(key);
     if (raw === null) return defaultValue;
     return raw === "true";
   }
-  let lastRunData = null;
+
   let selectedReason = localStorage.getItem(LS_KEY_REASON_SELECT) || "Matched Advertised Price";
   let selectedOtherText = localStorage.getItem(LS_KEY_REASON_OTHER_TEXT) || "";
   const REASON_OPTIONS = [
@@ -43,17 +49,14 @@
     "Other",
   ];
 
-  // Liquid glass theme: noise/blur background, translucent panels
   const THEME = {
     bg: "rgba(8, 8, 12, 0.92)",
     bgSolid: "#08080c",
     blur: "28px",
     border: "1px solid rgba(255, 255, 255, 0.06)",
-    borderHover: "1px solid rgba(255, 255, 255, 0.12)",
     noise: "url('https://grainy-gradients.vercel.app/noise.svg')",
     noiseOpacity: "0.07",
     accent: "#34C759",
-    accentHover: "#2AB04A",
     textMain: "#FFFFFF",
     textDim: "rgba(255, 255, 255, 0.55)",
     textDark: "rgba(255, 255, 255, 0.28)",
@@ -64,11 +67,8 @@
 
   function parseMoney(txt) {
     if (!txt) return 0;
-    // Preserve negative sign for refunds
-    // Handle both "-" prefix and accounting format with parentheses like "(100.00)"
     const isNegative = txt.includes("-") || (txt.includes("(") && txt.includes(")"));
-    const cleaned = txt.replace(/[^0-9.]/g, "");
-    const num = Number(cleaned);
+    const num = Number(txt.replace(/[^0-9.]/g, ""));
     return isNegative ? -Math.abs(num) : num;
   }
 
@@ -76,223 +76,109 @@
     return (el?.textContent || "").trim();
   }
 
-  // Truncate to 3 decimal places (no rounding)
+  function normName(s) {
+    return String(s || "").replace(/\s+/g, " ").trim();
+  }
+
   function trunc3(x) {
     if (x == null || Number.isNaN(x)) return x;
     return Math.trunc(x * 1000) / 1000;
   }
 
   function fmtPercent(rate) {
-    const p = rate * 100;
-    return String(p)
-      .replace(/(\.\d*?[1-9])0+$/, "$1")
-      .replace(/\.0$/, "");
+    if (!Number.isFinite(rate)) return "—";
+    const p = Math.round(rate * 1000) / 10;
+    return String(p).replace(/\.0$/, "");
   }
 
-  /** Round to cents for calculator display. */
-  function formatCalcMoney(n) {
-    if (!Number.isFinite(n)) return "—";
-    const neg = n < 0;
-    const abs = Math.abs(n);
-    const cents = Math.round(abs * 100) / 100;
-    const s = cents.toFixed(2);
-    return (neg ? "-$" : "$") + s;
+  // --- DOM ---
+  function isSaleOverview() {
+    return $$("h2").some((h) => text(h).includes("Sale Overview") && !isInHostModal(h));
   }
 
-  /**
-   * Evaluate a currency-style expression: + - * /, parentheses, optional $ and commas.
-   * A percentage on the right of + - * / applies to the usual meaning (e.g. $50-20% → 50 − 10 = 40).
-   */
-  function evalCurrencyExpr(raw) {
-    const cleaned = String(raw || "").trim();
-    if (!cleaned) {
-      return { ok: false, error: "Enter an expression." };
-    }
-    const s = cleaned.replace(/,/g, "").replace(/\s+/g, "");
-    let i = 0;
-    const peek = () => s[i] || "";
-
-    function parseNumberToken() {
-      if (peek() === "$") i++;
-      const start = i;
-      if (!/\d|\./.test(peek())) {
-        throw new Error(`Expected number at position ${i + 1}`);
-      }
-      while (/\d|\./.test(peek())) i++;
-      const n = parseFloat(s.slice(start, i));
-      if (Number.isNaN(n)) throw new Error("Invalid number");
-      let pctLiteral = false;
-      if (peek() === "%") {
-        pctLiteral = true;
-        i++;
-      }
-      return { val: n, pctLiteral };
-    }
-
-    function parsePrimary() {
-      if (peek() === "(") {
-        i++;
-        const v = parseAddSub();
-        if (peek() !== ")") throw new Error("Missing )");
-        i++;
-        return { val: v, pctLiteral: false };
-      }
-      return parseNumberToken();
-    }
-
-    function parseUnary() {
-      if (peek() === "-") {
-        i++;
-        const x = parseUnary();
-        return { val: -toMulValue(x), pctLiteral: false };
-      }
-      return parsePrimary();
-    }
-
-    function toMulValue(node) {
-      if (node.pctLiteral) return node.val / 100;
-      return node.val;
-    }
-
-    function parseMulDiv() {
-      let left = parseUnary();
-      while (peek() === "*" || peek() === "/") {
-        const op = peek();
-        i++;
-        const right = parseUnary();
-        const L = toMulValue(left);
-        const R = toMulValue(right);
-        if (op === "/" && R === 0) throw new Error("Division by zero");
-        const val = op === "*" ? L * R : L / R;
-        left = { val, pctLiteral: false };
-      }
-      return left;
-    }
-
-    function parseAddSub() {
-      let acc = parseMulDiv();
-      let accVal = acc.pctLiteral ? acc.val / 100 : acc.val;
-      while (peek() === "+" || peek() === "-") {
-        const op = peek();
-        i++;
-        const right = parseMulDiv();
-        if (right.pctLiteral) {
-          const p = right.val / 100;
-          accVal = op === "+" ? accVal + accVal * p : accVal - accVal * p;
-        } else {
-          const r = toMulValue(right);
-          accVal = op === "+" ? accVal + r : accVal - r;
-        }
-      }
-      return accVal;
-    }
-
-    try {
-      const result = parseAddSub();
-      if (i < s.length) {
-        return { ok: false, error: `Unexpected "${peek()}"` };
-      }
-      if (!Number.isFinite(result)) {
-        return { ok: false, error: "Invalid result." };
-      }
-      return { ok: true, value: result };
-    } catch (e) {
-      return { ok: false, error: e.message || "Invalid expression." };
-    }
+  function isInHostModal(node) {
+    return !!(
+      node &&
+      node.closest &&
+      node.closest(
+        '[role="dialog"], [role="alertdialog"], [aria-modal="true"], .MuiModal-root, .MuiDialog-root'
+      )
+    );
   }
 
-  // --- DOM TRAVERSAL ---
+  function isProductCard(node) {
+    if (!node || node === document.body || node === document.documentElement) return false;
+    if (!$$("b", node).some((b) => text(b) === "Sale Total:")) return false;
+    const skus = $$("p", node).filter((p) => text(p).startsWith("SKU:"));
+    return skus.length === 1;
+  }
+
   function getProductContainers() {
-    const skuPs = $$("p").filter((p) => text(p).startsWith("SKU:"));
     const containers = [];
-
-    for (const skuP of skuPs) {
-      let node = skuP;
+    const seen = new Set();
+    for (const skuP of $$("p").filter((p) => text(p).startsWith("SKU:"))) {
+      if (isInHostModal(skuP)) continue;
+      let node = skuP.parentElement;
       let container = null;
-
       for (let i = 0; i < 8 && node; i++) {
-        if (text(node).includes("Sale Total:")) {
+        if (isProductCard(node)) {
           container = node;
           break;
         }
         node = node.parentElement;
       }
-      container = container || skuP.parentElement;
+      if (!container || seen.has(container) || isInHostModal(container)) continue;
+      seen.add(container);
       containers.push(container);
     }
     return containers;
   }
 
-  function getSaleTotal(container) {
-    const saleB = $$("b", container).find((b) => text(b) === "Sale Total:");
-    if (!saleB) return null;
-    const span = saleB.closest("span") || saleB.parentElement;
-    const valP = span?.querySelector("p");
-    return parseMoney(text(valP));
+  function labeledMoney(container, label) {
+    const b = $$("b", container).find((el) => text(el) === label);
+    if (!b) return null;
+    const wrap = b.closest("span") || b.parentElement;
+    return parseMoney(text(wrap?.querySelector("p")));
   }
 
-  function getOriginalComm(container) {
-    const commB = $$("b", container).find((b) => text(b) === "Comm:");
-    if (!commB) return null;
-    const span = commB.closest("span") || commB.parentElement;
-    const valP = span?.querySelector("p");
-    return parseMoney(text(valP));
-  }
+  const getSaleTotal = (c) => labeledMoney(c, "Sale Total:");
+  const getOriginalComm = (c) => labeledMoney(c, "Comm:");
 
   function getAdjustButton(container) {
-    return $$("button", container).find((btn) =>
-      text(btn).includes("Add/Edit Adjustment")
-    );
+    return $$("button", container).find((btn) => text(btn).includes("Add/Edit Adjustment"));
+  }
+
+  function skuText(container) {
+    const p = $$("p", container).find((el) => text(el).startsWith("SKU:"));
+    return p ? text(p) : "";
   }
 
   function getSKU(container) {
-    const skuP = $$("p", container).find((p) => text(p).startsWith("SKU:"));
-    if (!skuP) return null;
-    const skuText = text(skuP);
-    // Extract SKU number (format: "SKU: 123456" or "SKU: 123456 (Q)")
-    const m = skuText.match(/SKU:\s*(\d+)/i);
+    const m = skuText(container).match(/SKU:\s*(\d+)/i);
     return m ? m[1] : null;
   }
 
   function getStockType(container) {
-    const skuP = $$("p", container).find((p) => text(p).startsWith("SKU:"));
-    const skuText = text(skuP);
-    const m = skuText.match(/\(([A-Z])\)/i);
+    const m = skuText(container).match(/\(([A-Z])\)/i);
     return m ? m[1].toUpperCase() : null;
   }
 
   function getProductName(container) {
-    const ps = $$("p", container).map((p) => text(p)).filter(Boolean);
-    const candidates = ps.filter(
-      (t) =>
-        !t.startsWith("SKU:") &&
-        !t.includes("Qty:") &&
-        !t.includes("Sale Total:") &&
-        !t.includes("Cost:") &&
-        !t.includes("Go Price:") &&
-        !t.includes("Comm:") &&
-        t.length > 3
-    );
+    const skip = /^(SKU:)|Qty:|Sale Total:|Cost:|Go Price:|Comm:/;
+    const candidates = $$("p", container)
+      .map((p) => text(p))
+      .filter((t) => t.length > 3 && !skip.test(t));
     if (!candidates.length) return "";
 
-    // Prioritize likely product names over descriptions
     const scored = candidates.map((c) => {
       let score = c.length;
-      const upper = c.toUpperCase();
-      if (
-        /IPHONE|2D SAMSUNG|MACBOOK|IMAC|MAC|IPAD|WATCH|SURFACE|LAPTOP|GALAXY|TABLET/i.test(
-          upper
-        )
-      )
+      const u = c.toUpperCase();
+      if (/IPHONE|2D SAMSUNG|MACBOOK|IMAC|MAC|IPAD|WATCH|SURFACE|LAPTOP|GALAXY|TABLET/i.test(u)) {
         score += 200;
-      if (
-        /\b(64|128|256|512)\s*GB\b/i.test(upper) ||
-        /\b[12]\s*TB\b/i.test(upper)
-      )
-        score += 50;
+      }
+      if (/\b(64|128|256|512)\s*GB\b/i.test(u) || /\b[12]\s*TB\b/i.test(u)) score += 50;
       return { c, score };
     });
-
     scored.sort((a, b) => b.score - a.score);
     return scored[0].c;
   }
@@ -303,289 +189,99 @@
     return m ? Number(m[1]) : 1;
   }
 
-  // --- PRODUCT CATEGORIZATION ---
-
-  // SKU Lists (Highest Priority - checked before name-based detection)
+  // --- CATEGORIZATION ---
+  // MacBook SKUs treated as primary even if the title is messy
   const SKU_MAIN_PRODUCTS = new Set([
-    // MacBook Pro SKUs
-    "465729", // MacBook Pro 14" M5 512GB/16GB Space Black
-    "465733", // MacBook Pro 14" M5 1TB/24GB Space Black
-    "448451", // MacBook Pro 14" M4 Pro 512GB/24GB Space Black
-    "448452", // MacBook Pro 14" M4 Pro 512GB/24GB Silver
-    "465734", // Apple MacBook Pro 14-inch with M5 Chip, 1TB/24GB (Silver)
-    "465730", // Apple MacBook Pro 14-inch with M5 Chip, 512GB/16GB (Silver)
-    "465731", // Apple MacBook Pro 14-inch with M5 Chip, 1TB/16GB (Space Black)
-    "465732", // Apple MacBook Pro 14-inch with M5 Chip, 1TB/16GB (Silver)
-
-    // MacBook Air SKUs
-    "453376", // MacBook Air 13" M4 256GB/16GB Midnight
-    // TODO: "453376" is duplicated above — verify if Silver has a different SKU
-    // "453376", // MacBook Air 13" M4 256GB/16GB Silver
-    "453378", // MacBook Air 13" M4 256GB/16GB Starlight
-    "453379", // MacBook Air 13" M4 256GB/16GB Sky Blue
-
-    // TODO: "453379" is duplicated above — verify if 512GB Starlight has a different SKU
-    // "453379", // MacBook Air 13" M4 512GB/16GB Starlight
-    "453381", // MacBook Air 13" M4 512GB/16GB Midnight
-    "453377", // MacBook Air 13" M4 512GB/16GB Silver
-    "453371", // MacBook Air 13" M4 512GB/16GB Sky Blue
-
-
-    "448417", // MacBook Air 13" M2 256GB/16GB Midnight
-    "448416", // MacBook Air 13" M2 256GB/16GB Starlight
-
-    "453382", // Apple MacBook Air 15-inch with M4 Chip, 256GB/16GB (Silver)
-    "453384", // Apple MacBook Air 15-inch with M4 Chip, 256GB/16GB (Starlight)
-    "453386", // Apple MacBook Air 15-inch with M4 Chip, 256GB/16GB (Midnight)
-    "453373", // Apple MacBook Air 15-inch with M4 Chip, 256GB/16GB (Sky Blue)
-    
-    "453383", // Apple MacBook Air 15-inch with M4 Chip, 512GB/16GB (Silver)
-    "453385", // Apple MacBook Air 15-inch with M4 Chip, 512GB/16GB (Starlight)
-    "453387", // Apple MacBook Air 15-inch with M4 Chip, 512GB/16GB (Midnight)
-    "453374", // Apple MacBook Air 15-inch with M4 Chip, 512GB/16GB (Sky Blue)
+    "465729", "465733", "448451", "448452", "465734", "465730", "465731", "465732",
+    "453376", "453378", "453379", "453381", "453377", "453371", "448417", "448416",
+    "453382", "453384", "453386", "453373", "453383", "453385", "453387", "453374",
   ]);
 
-  // Attach/Accessory SKUs by category
-  const SKU_ATTACH_IPHONE = new Set([
-  ]);
-
-  const SKU_ATTACH_MACBOOK = new Set([
-  ]);
-
-  const SKU_ATTACH_IPAD = new Set([
-  ]);
-
-  const SKU_ATTACH_CAMERA = new Set([
-  ]);
-
-  const SKU_ATTACH_GENERAL = new Set([
-  ]);
-
-  // Helper function to check if SKU is in any attach list
-  function getSKUAttachCategory(sku) {
-    if (!sku) return null;
-    if (SKU_ATTACH_IPHONE.has(sku)) return "iphone";
-    if (SKU_ATTACH_MACBOOK.has(sku)) return "macbook";
-    if (SKU_ATTACH_IPAD.has(sku)) return "ipad";
-    if (SKU_ATTACH_CAMERA.has(sku)) return "camera";
-    if (SKU_ATTACH_GENERAL.has(sku)) return "general";
-    return null;
-  }
-
-  // Regex for accessories to exclude from main product checks
   const RX_ACCESSORY_HINTS =
     /\b(CASE|COVER|PROTECTOR|SCREEN|GLASS|BUNDLE|PACK|KIT|SLEEVE|FOLIO|SHELL|SKIN|STRAP|BAND|CABLE|CHARGER|ADAPTER|MOUNT|HOLDER|STAND|KEYBOARD|PENCIL|STYLUS|BUDS|WATCH|FIT|EARBUD|HEADPHONE|SPEAKER|MOUSE|AUDIO)\b/i;
-
   const RX_CAMERA_BRANDS =
     /\b(CANON|SONY A|SONY ALPHA|NIKON|PANASONIC|INSTAX|POLAROID|GOPRO|DJI)\b/i;
-
   const RX_CAMERA_EXCLUDE =
     /\b(LENS|BATTERY|CHARGER|CASE|STRAP|MOUNT|SD|MEMORY|HEADPHONE|HEADPHONES|BUDS|EARBUD|SPEAKER|AUDIO)\b/i;
+  const RX_LAPTOP =
+    /\b(LENOVO\s+(IDEAPAD|LEGION|LOQ|YOGA)|MICROSOFT\s+SURFACE|HP\s+(VICTUS|OMNIBOOK|PAVILION|SPECTRE|LAPTOP|OMEN)|VICTUS\s+15|MSI\s+(CYBORG|CROSSHAIR)|ASUS\s+(ROG|VIVOBOOK|ZENBOOK|TUF))\b/i;
 
   function isAppleWatch(nameUpper) {
-    // Check for Apple Watch patterns (must check before accessory hints since "WATCH" is in RX_ACCESSORY_HINTS)
-    const n = nameUpper.replace(/\s+/g, " ");
-    return /\bAPPLE\s+WATCH/i.test(n) || 
-           /\bWATCH\s+(SERIES|SE|ULTRA)/i.test(n) ||
-           /APPLE\s+WATCH\s+(SERIES\s+\d+|SE|ULTRA)/i.test(n);
+    const n = normName(nameUpper);
+    return /\bAPPLE\s+WATCH/i.test(n) || /\bWATCH\s+(SERIES|SE|ULTRA)/i.test(n);
   }
 
   function isAccessory(nameUpper, container = null) {
-    // Check SKU first (highest priority)
-    if (container) {
-      const sku = getSKU(container);
-      if (sku && getSKUAttachCategory(sku)) {
-        return true; // SKU is in an attach list
-      }
-      // If SKU is in main products list, it's NOT an accessory
-      if (sku && SKU_MAIN_PRODUCTS.has(sku)) {
-        return false;
-      }
-    }
-    
-    // Products starting with "3SIXT - " are accessories
-    if (/^3SIXT\s*-\s*/i.test(nameUpper)) {
-      return true;
-    }
-    
-    // Products starting with "PANZERGLASS-" are accessories
-    if (/^PANZERGLASS\s*-/i.test(nameUpper)) {
-      return true;
-    }
-    
-    // Apple Watch is NOT an accessory - check this before other accessory patterns
-    if (isAppleWatch(nameUpper)) {
-      return false;
-    }
-    
-    // Fall back to name-based detection
+    const sku = container && getSKU(container);
+    if (sku && SKU_MAIN_PRODUCTS.has(sku)) return false;
+    if (/^3SIXT\s*-\s*/i.test(nameUpper) || /^PANZERGLASS\s*-/i.test(nameUpper)) return true;
+    if (isAppleWatch(nameUpper)) return false;
     return /AIRFLY|ADAPTER|AIRTAG|DONGLE|TRANSMITTER|RECEIVER|CASE|CABLE|CHARGER|MOUNT|STAND|COVER|PROTECTOR|EARBUD|HEADPHONE|TWS|ACCESSORY|ACCESSORIES|SPEAKER|MOUSE|KEYBOARD|SDXC|MICROSD|MEMORY|BAG|BACKPACK/i.test(
       nameUpper
     );
   }
 
-  /** AppleCare / AppleCare+ / AC+ style products — used for 5% commission. */
   function isAppleCare(nameUpper) {
-    const n = nameUpper.replace(/\s+/g, " ").trim();
+    const n = normName(nameUpper);
     if (!n) return false;
-    if (/APPLECARE\+?|APPLE\s*CARE|CARE\+/i.test(n)) return true;
-    if (/AC\s*\+|AC\+/i.test(n)) return true;
-    // Lone "AC" only with Apple / care context (avoids "AC adapter" style accessories)
-    if (
+    if (/APPLECARE\+?|APPLE\s*CARE|CARE\+|AC\s*\+|AC\+/i.test(n)) return true;
+    // Lone "AC" only with Apple/care context (skip AC adapters)
+    return (
       /\bAC\b/.test(n) &&
-      /\b(IPHONE|IPAD|MACBOOK|IMAC|MAC\s+MINI|APPLE\s+WATCH|\bWATCH\b|AIRPODS|APPLE\s+TV|HOMEPOD|COVERAGE|PROTECTION|INSURANCE|DEVICE)\b/i.test(
-        n
-      )
-    ) {
-      return true;
-    }
-    return false;
+      /\b(IPHONE|IPAD|MACBOOK|IMAC|MAC\s+MINI|APPLE\s+WATCH|\bWATCH\b|AIRPODS|APPLE\s+TV|HOMEPOD|COVERAGE|PROTECTION|INSURANCE|DEVICE)\b/i.test(n)
+    );
   }
 
   function isAirPods(nameUpper) {
-    // Specifically match AirPods Pro 3, Pro 2, and AirPods 4
-    if (/AIRPODS\s+PRO\s+3|AIRPODS\s+PRO\s+2|AIRPODS\s+4/i.test(nameUpper)) {
-      return true;
-    }
-    // Also catch other AirPods variants
     return /\bAIRPODS\b/i.test(nameUpper);
   }
 
   function isAppleProduct(nameUpper, container = null) {
-    // Check SKU first (highest priority)
-    if (container) {
-      const sku = getSKU(container);
-      if (sku && SKU_MAIN_PRODUCTS.has(sku)) {
-        // Check if it's an Apple product by name (SKU list doesn't distinguish Apple vs non-Apple)
-        // If SKU is in main products, check name to see if it's Apple
-        const n = nameUpper.replace(/\s+/g, " ");
-        // Check Apple Watch before accessory hints
-        if (isAppleWatch(n)) return true;
-        if (RX_ACCESSORY_HINTS.test(n)) return false;
-        if (/IPHONE|IPAD|MACBOOK|IMAC|MAC\s+MINI|MAC\s+STUDIO|AIRPODS/i.test(n)) {
-          return true;
-        }
-        // If SKU is in main products but name doesn't suggest Apple, it's not Apple
-        return false;
-      }
-      // If SKU is in attach lists, it's NOT a main Apple product
-      if (sku && getSKUAttachCategory(sku)) {
-        return false;
-      }
-    }
-    
-    // Fall back to name-based detection
-    const n = nameUpper.replace(/\s+/g, " ");
-    
-    // Check Apple Watch FIRST (before accessory hints, since "WATCH" is in RX_ACCESSORY_HINTS)
+    const sku = container && getSKU(container);
+    if (sku && SKU_MAIN_PRODUCTS.has(sku)) return true;
+
+    const n = normName(nameUpper);
     if (isAppleWatch(n)) return true;
-    
     if (RX_ACCESSORY_HINTS.test(n)) return false;
 
     if (/IPHONE/i.test(n)) {
-      const modelMatch = n.match(/\bIPHONE\s*(1[3-9]|SE)\b/i);
-      if (!modelMatch) return false;
-      // iPhone must have storage to be valid hardware
-      const hasStorage =
-        /\b(64|128|256|512)\s*GB\b/i.test(n) ||
-        /\b1\s*TB\b/i.test(n) ||
-        /\b2\s*TB\b/i.test(n);
-      return hasStorage;
+      if (!/\bIPHONE\s*(1[3-9]|SE)\b/i.test(n)) return false;
+      return /\b(64|128|256|512)\s*GB\b/i.test(n) || /\b[12]\s*TB\b/i.test(n);
     }
-
-    if (/\bIPAD\b/i.test(n)) return true;
-    if (/\bMACBOOK\b|\bIMAC\b|\bMAC\s+MINI\b|\bMAC\s+STUDIO\b/i.test(n))
-      return true;
-    if (/\bAIRPODS\b/i.test(n)) return true;
-
-    return false;
+    return /\b(IPAD|MACBOOK|IMAC|MAC\s+MINI|MAC\s+STUDIO|AIRPODS)\b/i.test(n);
   }
 
   function isSamsungDevice(nameUpper) {
-    const n = nameUpper.replace(/\s+/g, " ");
-    if (!/\bSAMSUNG\b/i.test(n)) return false;
-    
-    // Check for S25 series (S25, S25+, S25 Ultra, S25 Pro, etc.) - these don't have "GALAXY" in the name
-    if (/\bS25[\s\+]?\+?[\s]?(ULTRA|PRO)?/i.test(n)) {
-      if (RX_ACCESSORY_HINTS.test(n)) return false;
-      return true;
-    }
-    
-    // Check for Galaxy devices (requires both SAMSUNG and GALAXY)
-    if (!/\bGALAXY\b/i.test(n)) return false;
-    if (RX_ACCESSORY_HINTS.test(n)) return false;
-    if (/\bBOOK\b/i.test(n)) return false; // Exclude Galaxy Book (Laptops handled in general logic)
+    const n = normName(nameUpper);
+    if (!/\bSAMSUNG\b/i.test(n) || RX_ACCESSORY_HINTS.test(n)) return false;
+    if (/\bS25[\s\+]?\+?[\s]?(ULTRA|PRO)?/i.test(n)) return true;
+    if (!/\bGALAXY\b/i.test(n) || /\bBOOK\b/i.test(n)) return false;
     return true;
   }
 
   function isCamera(nameUpper) {
-    const n = nameUpper.replace(/\s+/g, " ");
+    const n = normName(nameUpper);
     return RX_CAMERA_BRANDS.test(n) && !RX_CAMERA_EXCLUDE.test(n);
   }
 
   function isMainNonAppleProduct(nameUpper, container = null) {
-    // Check SKU first (highest priority)
-    if (container) {
-      const sku = getSKU(container);
-      if (sku && SKU_MAIN_PRODUCTS.has(sku)) {
-        // Check if it's NOT an Apple product (if it's in main products but not Apple, it's non-Apple main)
-        const n = nameUpper.replace(/\s+/g, " ");
-        if (RX_ACCESSORY_HINTS.test(n)) return false;
-        // If SKU is in main products and name suggests non-Apple, return true
-        if (isSamsungDevice(n)) return true;
-        if (isCamera(n)) return true;
-        if (/\bLENOVO|MICROSOFT\s+SURFACE|HP\s+(VICTUS|OMNIBOOK|PAVILION|SPECTRE|LAPTOP|OMEN)|MSI|ASUS/i.test(n)) {
-          return true;
-        }
-        // If SKU is in main products but name suggests Apple, it's not non-Apple
-        if (/IPHONE|IPAD|MACBOOK|IMAC|MAC\s+MINI|MAC\s+STUDIO|APPLE\s+WATCH|AIRPODS/i.test(n)) {
-          return false;
-        }
-        // If SKU is in main products but we can't determine from name, assume it could be non-Apple
-        // This is a fallback - ideally SKU lists would be more specific
-      }
-      // If SKU is in attach lists, it's NOT a main product
-      if (sku && getSKUAttachCategory(sku)) {
-        return false;
-      }
-    }
-    
-    // Fall back to name-based detection
-    const n = nameUpper.replace(/\s+/g, " ");
-
-    if (isSamsungDevice(n)) return true;
-    if (isCamera(n)) return true;
-
-    return (
-      /\bLENOVO\s+IDEAPAD\b/i.test(n) ||
-      /\bLENOVO\s+LEGION\b/i.test(n) ||
-      /\bLENOVO\s+LOQ\b/i.test(n) ||
-      /\bLENOVO\s+YOGA\b/i.test(n) ||
-      /\bMICROSOFT\s+SURFACE\b/i.test(n) ||
-      /\bHP\s+VICTUS\b/i.test(n) ||
-      /\bHP\s+OMNIBOOK\b/i.test(n) ||
-      /\bHP\s+PAVILION\b/i.test(n) ||
-      /\bHP\s+SPECTRE\b/i.test(n) ||
-      /\bVICTUS\s+15\b/i.test(n) ||
-      /\bHP\s+LAPTOP\b/i.test(n) ||
-      /\bHP\s+OMEN\b/i.test(n) ||
-      /\bMSI\s+CYBORG\b/i.test(n) ||
-      /\bMSI\s+CROSSHAIR\b/i.test(n) ||
-      /\bASUS\s+ROG\b/i.test(n) ||
-      /\bASUS\s+VIVOBOOK\b/i.test(n) ||
-      /\bASUS\s+ZENBOOK\b/i.test(n) ||
-      /\bASUS\s+TUF\b/i.test(n)
-    );
+    const sku = container && getSKU(container);
+    if (sku && SKU_MAIN_PRODUCTS.has(sku)) return false;
+    const n = normName(nameUpper);
+    return isSamsungDevice(n) || isCamera(n) || RX_LAPTOP.test(n);
   }
 
-  function isBigElectronicDevice(nameUpper) {
-    const n = nameUpper.replace(/\s+/g, " ");
-    return /TABLET|IPAD|GALAXY TAB|SURFACE|CAMERA|DSLR|MIRRORLESS|LAPTOP|CANON EOS|SONY ALPHA|NOTEBOOK|ULTRABOOK|MACBOOK|RYZEN|INTEL|SNAPDRAGON|CHROMEBOOK|PC|SMARTPHONE|GALAXY S/i.test(
-      n
-    );
+  function rateResult(saleTotal, rate, label, note, name, extra = {}) {
+    return {
+      value: saleTotal * rate,
+      rate,
+      baseRate: extra.baseRate ?? rate,
+      multiplier: extra.multiplier ?? 1,
+      label,
+      note,
+      name,
+    };
   }
-
-  // --- CALCULATION LOGIC ---
 
   function computeCommission(container, ctx) {
     const saleTotal = getSaleTotal(container);
@@ -595,182 +291,77 @@
     const nameU = nameRaw.toUpperCase();
     const stockType = getStockType(container);
     const qty = getQty(container);
-
+    const solo = ctx.saleItemCount === 1 && qty === 1;
     const appleCareItem = isAppleCare(nameU);
-    
-    const isItemAirPods = isAirPods(nameU);
+    const airPods = isAirPods(nameU);
+
     let appleItem = isAppleProduct(nameU, container) && !appleCareItem;
     let accessoryItem = isAccessory(nameU, container);
-
-    // Dynamic AirPods logic:
-    // - AirPods sold alone (saleItemCount === 1) = 0.5% (treated as main product, no-attach rate)
-    // - AirPods sold with other items (saleItemCount > 1) = 0.5% (treated as accessory, regardless of what it's sold with)
-    if (isItemAirPods) {
-      if (ctx.saleItemCount === 1) {
-        // AirPods sold alone = main product (0.5%)
-        appleItem = true;
-        accessoryItem = false;
-      } else {
-        // AirPods sold with other items = accessory (0.5%)
-        appleItem = false;
-        accessoryItem = true;
-      }
+    if (airPods) {
+      appleItem = ctx.saleItemCount === 1;
+      accessoryItem = !appleItem;
     } else if (appleItem) {
-      // Ensure normal Apple products don't accidentally flag as accessories via overlapping keywords
       accessoryItem = false;
     }
 
-    // 1. AppleCare Always 5%
     if (appleCareItem) {
-      return {
-        value: saleTotal * 0.05,
-        rate: 0.05,
-        baseRate: 0.05,
-        multiplier: 1,
-        label: "AppleCare",
-        note: "AppleCare 5%",
-        name: nameRaw,
-      };
+      return rateResult(saleTotal, 0.05, "AppleCare", "AppleCare 5%", nameRaw);
     }
 
-    // 1.5. AirPods sold alone = 0.5% (before Q Stock check)
-    // This must happen before any other logic that might classify AirPods differently
-    // Check if AirPods is the only item in the sale (sold alone)
-    // Use both isItemAirPods check and direct name check for robustness
-    const isAirPodsProduct = isItemAirPods || /AIRPODS/i.test(nameU);
-    if (isAirPodsProduct && stockType !== "Q") {
-      // If sold alone (saleItemCount === 1 means only this item in the sale)
-      // Also check qty === 1 to ensure it's a single unit
-      if (ctx.saleItemCount === 1 && qty === 1) {
-        return {
-          value: saleTotal * 0.005,
-          rate: 0.005,
-          baseRate: 0.005,
-          multiplier: 1,
-          label: "Solo Apple (AirPods)",
-          note: "Main Product with no attach 0.5%",
-          name: nameRaw,
-        };
-      }
+    // Solo AirPods 0.5% (not the usual 0.2% no-attach rate); Q-stock still uses Q rates
+    if (airPods && stockType !== "Q" && solo) {
+      return rateResult(saleTotal, 0.005, "Solo Apple (AirPods)", "Main Product with no attach 0.5%", nameRaw);
     }
 
-    // 2. Q Stock Logic
     if (stockType === "Q") {
       const isMain = appleItem || isMainNonAppleProduct(nameU, container);
-      const noteSuffix = isMain 
-        ? ". Considering this as primary product for any attached items (IPS Multiplier)" 
+      const noteSuffix = isMain
+        ? ". Considering this as primary product for any attached items (IPS Multiplier)"
         : "";
-
       if (appleItem) {
-        return {
-          value: saleTotal * 0.015,
-          rate: 0.015,
-          baseRate: 0.015,
-          multiplier: 1,
-          label: "Q Apple",
-          note: `Apple Q Stock 1.5%${noteSuffix}`,
-          name: nameRaw,
-        };
+        return rateResult(saleTotal, 0.015, "Q Apple", `Apple Q Stock 1.5%${noteSuffix}`, nameRaw);
       }
-      return {
-        value: saleTotal * 0.023,
-        rate: 0.023,
-        baseRate: 0.023,
-        multiplier: 1,
-        label: "Q stock",
-        note: `Q Stock 2.3%${noteSuffix}`,
-        name: nameRaw,
-      };
+      return rateResult(saleTotal, 0.023, "Q stock", `Q Stock 2.3%${noteSuffix}`, nameRaw);
     }
 
-    // 3. Primary Products Logic (Phones, Tablets, Cameras, Computers)
     if (appleItem || isMainNonAppleProduct(nameU, container)) {
-      // Rule: Any Primary Product sold by itself = 0.2%
-      // Special handling for AirPods: solo AirPods get 0.5% (not the usual 0.2% no-attach rate)
-      // Use both isItemAirPods check and direct name check for robustness
-      const isAirPodsProduct = isItemAirPods || /AIRPODS/i.test(nameU);
-      if (isAirPodsProduct && ctx.saleItemCount === 1 && qty === 1) {
-        return {
-          value: saleTotal * 0.005,
-          rate: 0.005,
-          baseRate: 0.005,
-          multiplier: 1,
-          label: "Solo Apple (AirPods)",
-          note: "Main Product with no attach 0.5%",
-          name: nameRaw,
-        };
+      if (solo) {
+        return rateResult(
+          saleTotal, 0.002,
+          appleItem ? "Solo Apple" : "Solo Primary",
+          "Main Product with no attach 0.2%",
+          nameRaw
+        );
       }
-
-      if (ctx.saleItemCount === 1 && qty === 1) {
-        return {
-          value: saleTotal * 0.002,
-          rate: 0.002,
-          baseRate: 0.002,
-          multiplier: 1,
-          label: appleItem ? "Solo Apple" : "Solo Primary",
-          note: "Main Product with no attach 0.2%",
-          name: nameRaw,
-        };
-      }
-
-      return {
-        value: saleTotal * 0.005,
-        rate: 0.005,
-        baseRate: 0.005,
-        multiplier: 1,
-        label: appleItem ? "Apple w/ others" : "Main Product w/ others",
-        note: appleItem
-          ? "Main Product with attach/AC 0.5%"
-          : "Main Product (non-Apple) 0.5%",
-        name: nameRaw,
-      };
+      return rateResult(
+        saleTotal, 0.005,
+        appleItem ? "Apple w/ others" : "Main Product w/ others",
+        appleItem ? "Main Product with attach/AC 0.5%" : "Main Product (non-Apple) 0.5%",
+        nameRaw
+      );
     }
 
-    // 4. Default/Accessory Logic
-    let baseRate = 0.005;
-    let label = "Default";
+    let label = accessoryItem ? "Accessory default" : "Default";
     let note = "";
-
-    if (accessoryItem) {
-      baseRate = 0.005;
-      label = "Accessory default";
-    } else if (isBigElectronicDevice(nameU)) {
-      baseRate = 0.005;
-      label = "Big device default";
-    }
-
-    // 5. Multipliers
     let multiplier = 1;
 
-    // AirPods should get 0.5% flat when sold with others (no multipliers)
-    if (isItemAirPods && accessoryItem) {
-      // AirPods as accessory: 0.5% flat, no multipliers
-      multiplier = 1;
-    } else if (ctx.appleCareSoldWithAppleAndOthers && !appleCareItem && !appleItem) {
-      multiplier = 2.5;
-      label += " ×2.5 (AppleCare bundle)";
-      note = "AppleCare Multiplier 0.5% * 2.5";
-    } else if (
-      (ctx.appleSoldWithOthers || ctx.nonAppleMainSoldWithOthers) &&
-      !appleCareItem
-    ) {
-      multiplier = 2;
-      label += " ×2 (IPS bundle)";
-      note = "IPS Multiplier 0.5% * 2";
+    // AirPods with others stay 0.5% flat (no IPS / AppleCare multipliers)
+    if (!(airPods && accessoryItem)) {
+      if (ctx.appleCareSoldWithAppleAndOthers && !appleCareItem && !appleItem) {
+        multiplier = 2.5;
+        label += " ×2.5 (AppleCare bundle)";
+        note = "AppleCare Multiplier 0.5% * 2.5";
+      } else if (ctx.primarySoldWithOthers && !appleCareItem) {
+        multiplier = 2;
+        label += " ×2 (IPS bundle)";
+        note = "IPS Multiplier 0.5% * 2";
+      }
     }
 
-    const finalRate = baseRate * multiplier;
-    const finalValue = saleTotal * finalRate;
-
-    return {
-      value: finalValue,
-      rate: finalRate,
-      baseRate,
+    return rateResult(saleTotal, 0.005 * multiplier, label, note, nameRaw, {
+      baseRate: 0.005,
       multiplier,
-      label,
-      note,
-      name: nameRaw,
-    };
+    });
   }
 
   function buildWorkingText(
@@ -806,21 +397,10 @@
 
   function setReactValue(el, value) {
     if (!el) return;
-
-    let proto;
-    if (el.tagName === "TEXTAREA") {
-      proto = HTMLTextAreaElement.prototype;
-    } else {
-      proto = HTMLInputElement.prototype;
-    }
-
+    const proto = el.tagName === "TEXTAREA" ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
     const setter = Object.getOwnPropertyDescriptor(proto, "value")?.set;
-    if (setter) {
-      setter.call(el, value);
-    } else {
-      el.value = value;
-    }
-
+    if (setter) setter.call(el, value);
+    else el.value = value;
     el.dispatchEvent(new InputEvent("input", { bubbles: true }));
     el.dispatchEvent(new Event("change", { bubbles: true }));
   }
@@ -835,9 +415,14 @@
     return null;
   }
 
-  // --- NOTIFICATION SYSTEM ---
+  function el(tag, className, text) {
+    const node = document.createElement(tag);
+    if (className) node.className = className;
+    if (text != null) node.textContent = text;
+    return node;
+  }
 
-  function getStack() {
+  function notify(msg, duration = 4500) {
     let stack = document.getElementById("jbh-notification-stack");
     if (!stack) {
       stack = document.createElement("div");
@@ -849,45 +434,26 @@
         transform: "translateX(-50%)",
         zIndex: 2147483647,
         display: "flex",
-        flexDirection: "column-reverse", // Newest at bottom
+        flexDirection: "column-reverse",
         gap: "8px",
         alignItems: "center",
         pointerEvents: "none",
         maxWidth: "90vw",
-        transition: "all 0.3s ease"
+        transition: "all 0.3s ease",
       });
       document.body.appendChild(stack);
     }
-    return stack;
-  }
-
-  function showToast(msg, duration = 3000, isSecondary = false) {
-    const stack = getStack();
     const item = document.createElement("div");
     item.className = "jbh-toast";
     item.textContent = msg;
-
-    if (isSecondary) {
-        item.style.opacity = "0.8";
-        item.style.transform = "scale(0.95)";
-    }
-
     stack.appendChild(item);
-
-    // Animate out
     setTimeout(() => {
       item.classList.add("hiding");
       setTimeout(() => {
         item.remove();
-        if (!stack.hasChildNodes()) {
-          stack.remove();
-        }
+        if (!stack.hasChildNodes()) stack.remove();
       }, 400);
     }, duration);
-  }
-
-  function notify(msg) {
-    showToast(msg, 4500); // Increased from 2500 to 4500
   }
 
   async function pickReasonOption(label) {
@@ -1009,7 +575,7 @@
     return computed;
   }
 
-  /** Clamp + trunc3 — same value Run Adjustment writes. */
+  // Clamp + trunc3 — same value Run Adjustment writes
   function finalizeCommission(computedRaw, container) {
     if (!computedRaw) return null;
     const saleTotal = getSaleTotal(container) || 0;
@@ -1031,43 +597,38 @@
     return n < 0 ? `-$${Math.abs(n)}` : `$${n}`;
   }
 
-  // --- SALE PREVIEW (shared by summary + confirmation) ---
+  function buildSaleContext(containers) {
+    const flags = containers.map((c) => {
+      const nU = getProductName(c).toUpperCase();
+      const airPods = isAirPods(nU);
+      const listedPrimary = isAppleProduct(nU, c) || isMainNonAppleProduct(nU, c);
+      return {
+        appleCare: isAppleCare(nU),
+        airPods,
+        listedPrimary,
+      };
+    });
+    const hasRealPrimaryProduct = flags.some((f) => f.listedPrimary && !f.airPods);
+    const primaryCount = flags.filter((f) => {
+      if (f.airPods && hasRealPrimaryProduct) return false;
+      return f.listedPrimary;
+    }).length;
+    const n = containers.length;
+    const appleCareCount = flags.filter((f) => f.appleCare).length;
+    return {
+      saleItemCount: n,
+      hasRealPrimaryProduct,
+      primarySoldWithOthers: primaryCount > 0 && n > primaryCount,
+      appleCareSoldWithAppleAndOthers:
+        appleCareCount > 0 && primaryCount > 0 && n > primaryCount + appleCareCount,
+    };
+  }
+
   function computeSalePreview() {
     const containers = getProductContainers();
     if (!containers.length) return null;
 
-    const flags = containers.map((c) => {
-      const nU = getProductName(c).toUpperCase();
-      const appleCare = isAppleCare(nU);
-      const _isAirPods = isAirPods(nU);
-      const _isPrimary = isAppleProduct(nU, c) || isMainNonAppleProduct(nU, c);
-      const _isRealPrimary = _isPrimary && !_isAirPods;
-      return { appleCare, _isAirPods, _isRealPrimary, _isPrimary };
-    });
-
-    const hasRealPrimaryProduct = flags.some(f => f._isRealPrimary);
-    const finalRoles = flags.map(f => {
-      let isPrimary = f._isPrimary;
-      if (f._isAirPods && hasRealPrimaryProduct) isPrimary = false;
-      return { ...f, isPrimary };
-    });
-    const primaryCount = finalRoles.filter(f => f.isPrimary).length;
-    const hasPrimary = primaryCount > 0;
-
-    const ctx = {
-      saleItemCount: containers.length,
-      hasRealPrimaryProduct,
-      appleSoldWithOthers: hasPrimary && containers.length > primaryCount,
-      nonAppleMainSoldWithOthers: hasPrimary && containers.length > primaryCount,
-      appleCareSoldWithAppleAndOthers: false
-    };
-
-    const hasAppleCare = flags.some(f => f.appleCare);
-    const appleCareCount = flags.filter(f => f.appleCare).length;
-    if (hasAppleCare && hasPrimary && containers.length > (primaryCount + appleCareCount)) {
-      ctx.appleCareSoldWithAppleAndOthers = true;
-    }
-
+    const ctx = buildSaleContext(containers);
     const onlyZeroOn = lsFlag(LS_KEY_ONLY_ZERO, true);
     const targets = onlyZeroOn
       ? containers.filter((c) => getOriginalComm(c) === 0)
@@ -1109,157 +670,182 @@
   function showConfirmation(preview) {
     return new Promise((resolve) => {
       let resolved = false;
+      const runBtn = document.getElementById("jbh-eff-run-btn");
+      const useEffConfirm = lsFlag(LS_KEY_EFFICIENCY) && !!runBtn;
+      let placeEffConfirm = () => {};
+
+      const overlay = document.createElement("div");
+      overlay.id = "jbh-confirm-overlay";
+
+      const dialog = document.createElement("div");
+      dialog.id = "jbh-confirm-dialog";
+
+      const confirmBtn = document.createElement("button");
+      confirmBtn.type = "button";
+      confirmBtn.textContent = "Confirm";
+
       const cleanup = () => {
         if (resolved) return;
         resolved = true;
-        backdrop.remove();
-        dialog.remove();
+        document.removeEventListener("keydown", onKey);
+        window.removeEventListener("resize", placeEffConfirm);
+        window.visualViewport?.removeEventListener("resize", placeEffConfirm);
+        overlay.remove();
+        confirmBtn.remove();
+        if (runBtn) runBtn.style.visibility = "";
       };
 
-      // Backdrop: frosted glass overlay (noise/blur)
-      const backdrop = document.createElement("div");
-      backdrop.id = "jbh-confirm-backdrop";
-      backdrop.setAttribute("style", [
-        "position:fixed", "top:0", "left:0", "width:100vw", "height:100vh",
-        "background:rgba(8,8,12,0.55)",
-        "backdrop-filter:blur(20px)",
-        "-webkit-backdrop-filter:blur(20px)",
-        "z-index:2147483646",
-        "cursor:pointer"
-      ].join(";") + ";");
-      backdrop.addEventListener("click", () => { cleanup(); resolve(false); });
+      const onKey = (e) => {
+        if (e.key === "Escape") {
+          e.preventDefault();
+          cleanup();
+          resolve(false);
+        } else if (e.key === "Enter") {
+          e.preventDefault();
+          cleanup();
+          resolve(true);
+        }
+      };
+      document.addEventListener("keydown", onKey);
 
-      // Dialog: fixed center, no parent dependencies
-      const dialog = document.createElement("div");
-      dialog.id = "jbh-confirm-dialog";
-      dialog.setAttribute("style", [
-        "position:fixed",
-        "top:50%", "left:50%",
-        "transform:translate(-50%,-50%)",
-        "z-index:2147483647",
-        `background:${THEME.bg}`,
-        `backdrop-filter:blur(${THEME.blur})`,
-        `border-radius:${THEME.radius}`,
-        `border:${THEME.border}`,
-        "padding:28px",
-        "max-width:420px", "width:90vw", "max-height:80vh",
-        "display:flex", "flex-direction:column", "gap:20px",
-        "color:white",
-        `box-shadow:${THEME.shadow}`,
-        "font-family:-apple-system,BlinkMacSystemFont,Inter,Segoe UI,Roboto,sans-serif",
-        "overflow:hidden",
-        "animation:jbh-fade-in 0.5s cubic-bezier(0.16, 1, 0.3, 1) forwards"
-      ].join(";") + ";");
-
-      // Add noise overlay for liquid glass texture
-      const noiseOverlay = document.createElement("div");
-      Object.assign(noiseOverlay.style, {
-          position: "absolute",
-          top: "0", left: "0", right: "0", bottom: "0",
-          backgroundImage: THEME.noise,
-          opacity: THEME.noiseOpacity,
-          pointerEvents: "none",
-          zIndex: "0",
+      overlay.addEventListener("click", (e) => {
+        if (e.target !== overlay && !e.target.classList?.contains("jbh-confirm-scrim")) return;
+        cleanup();
+        resolve(false);
       });
+
+      const noiseOverlay = document.createElement("div");
+      noiseOverlay.className = "jbh-confirm-noise";
       dialog.appendChild(noiseOverlay);
 
-      // Prevent clicks on dialog from dismissing
-      dialog.addEventListener("click", (e) => e.stopPropagation());
-
-      // Title
       const titleEl = document.createElement("div");
+      titleEl.className = "jbh-confirm-title";
       titleEl.textContent = "Confirm Adjustments";
-      titleEl.setAttribute("style", `font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:1px;color:${THEME.textDim};text-align:center;flex-shrink:0;position:relative;zIndex:1;`);
       dialog.appendChild(titleEl);
 
-      // Items list
       const list = document.createElement("div");
-      list.setAttribute("style", "display:flex;flex-direction:column;gap:8px;overflow-y:auto;max-height:45vh;padding:4px 0;position:relative;zIndex:1;");
+      list.className = "jbh-confirm-list";
 
       for (const item of preview.items) {
         const row = document.createElement("div");
-        const bg = item.isTarget ? `${THEME.accent}10` : "rgba(255,255,255,0.03)";
-        const border = item.isTarget ? `1px solid ${THEME.accent}22` : "1px solid rgba(255,255,255,0.05)";
-        const op = item.isTarget ? "1" : "0.4";
-        row.setAttribute("style", `display:flex;justify-content:space-between;align-items:center;font-size:13px;padding:10px 14px;border-radius:12px;background:${bg};border:${border};opacity:${op};`);
+        row.className = `jbh-confirm-row${item.isTarget ? " is-target" : ""}`;
 
         const nameSpan = document.createElement("span");
+        nameSpan.className = "jbh-confirm-name";
         nameSpan.textContent = item.name || "Unknown";
-        nameSpan.setAttribute("style", "flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-right:12px;font-weight:500;");
 
         const valSpan = document.createElement("span");
+        valSpan.className = "jbh-confirm-val";
         const fmtVal = formatSignedMoney(item.value);
         valSpan.textContent = item.keptOriginal
           ? `${fmtPercent(item.rate)}% = ${fmtVal} · kept`
           : `${fmtPercent(item.rate)}% = ${fmtVal}`;
-        const valColor = item.isTarget ? THEME.accent : THEME.textDim;
-        valSpan.setAttribute("style", `font-weight:700;flex-shrink:0;color:${valColor};font-size:14px;`);
 
         row.append(nameSpan, valSpan);
         list.appendChild(row);
       }
       dialog.appendChild(list);
 
-      // Total — "to write" is targetTotal; full sale preview when some lines are skipped
       const totalEl = document.createElement("div");
-      totalEl.setAttribute("style", `text-align:center;font-size:14px;font-weight:500;padding:16px 0;border-top:1px solid rgba(255,255,255,0.05);flex-shrink:0;position:relative;zIndex:1;`);
+      totalEl.className = "jbh-confirm-total";
       const writeFmt = formatSignedMoney(preview.targetTotal);
       const skipped = preview.totalCount - preview.targetCount;
-      let totalHtml = `<span style="color:${THEME.textDim};font-size:12px;text-transform:uppercase;letter-spacing:0.5px;display:block;margin-bottom:4px;">Total to write</span><span style="color:${THEME.accent};font-weight:800;font-size:24px;">${writeFmt}</span><div style="color:${THEME.textDark};font-size:11px;margin-top:4px;">${preview.targetCount} items to adjust</div>`;
+      let totalHtml = `<span class="jbh-confirm-total-label">Total to write</span><span class="jbh-confirm-total-value">${writeFmt}</span><div class="jbh-confirm-total-meta">${preview.targetCount} items to adjust</div>`;
       if (skipped > 0) {
-        totalHtml += `<div style="color:${THEME.textDark};font-size:11px;margin-top:6px;">Sale preview ${formatSignedMoney(preview.total)} · ${skipped} unchanged</div>`;
+        totalHtml += `<div class="jbh-confirm-total-meta">Sale preview ${formatSignedMoney(preview.total)} · ${skipped} unchanged</div>`;
       }
       totalEl.innerHTML = totalHtml;
       dialog.appendChild(totalEl);
 
-      // Buttons
       const btnRow = document.createElement("div");
-      btnRow.setAttribute("style", "display:flex;gap:12px;flex-shrink:0;position:relative;zIndex:1;");
+      btnRow.className = "jbh-confirm-actions";
 
       const cancelBtn = document.createElement("button");
+      cancelBtn.type = "button";
+      cancelBtn.className = "jbh-confirm-cancel";
       cancelBtn.textContent = "Cancel";
-      cancelBtn.setAttribute("style", `flex:1;padding:14px;border-radius:12px;border:1px solid rgba(255,255,255,0.1);background:rgba(255,255,255,0.05);color:#fff;font-size:14px;font-weight:600;cursor:pointer;transition:all 0.2s;`);
-      cancelBtn.addEventListener("mouseenter", () => { cancelBtn.style.background = "rgba(255,255,255,0.1)"; });
-      cancelBtn.addEventListener("mouseleave", () => { cancelBtn.style.background = "rgba(255,255,255,0.05)"; });
       cancelBtn.addEventListener("click", () => { cleanup(); resolve(false); });
 
-      const confirmBtn = document.createElement("button");
-      confirmBtn.textContent = "Confirm";
-      confirmBtn.setAttribute("style", `flex:1.5;padding:14px;border-radius:12px;border:none;background:${THEME.textMain};color:${THEME.bgSolid};font-size:14px;font-weight:700;cursor:pointer;transition:all 0.2s;box-shadow:0 4px 15px rgba(0,0,0,0.2);`);
-      confirmBtn.addEventListener("mouseenter", () => { confirmBtn.style.background = THEME.accent; confirmBtn.style.color = "white"; confirmBtn.style.transform = "translateY(-2px)"; confirmBtn.style.boxShadow = `0 8px 25px ${THEME.accent}44`; });
-      confirmBtn.addEventListener("mouseleave", () => { confirmBtn.style.background = THEME.textMain; confirmBtn.style.color = THEME.bgSolid; confirmBtn.style.transform = "translateY(0)"; confirmBtn.style.boxShadow = "0 4px 15px rgba(0,0,0,0.2)"; });
       confirmBtn.addEventListener("click", () => { cleanup(); resolve(true); });
 
-      btnRow.append(cancelBtn, confirmBtn);
-      dialog.appendChild(btnRow);
+      if (useEffConfirm) {
+        confirmBtn.className = "jbh-eff-btn jbh-eff-confirm-btn";
+        runBtn.style.visibility = "hidden";
+        placeEffConfirm = () => {
+          const r = runBtn.getBoundingClientRect();
+          if (!r.width && !r.height) return;
+          confirmBtn.style.left = `${r.left}px`;
+          confirmBtn.style.top = `${r.top}px`;
+          confirmBtn.style.width = `${r.width}px`;
+          confirmBtn.style.height = `${r.height}px`;
+        };
+        window.addEventListener("resize", placeEffConfirm);
+        window.visualViewport?.addEventListener("resize", placeEffConfirm);
+        btnRow.append(cancelBtn);
+      } else {
+        confirmBtn.className = "jbh-confirm-ok";
+        btnRow.append(cancelBtn, confirmBtn);
+      }
 
-      // Append both directly to body
-      document.body.appendChild(backdrop);
-      document.body.appendChild(dialog);
+      dialog.appendChild(btnRow);
+      const scrim = document.createElement("div");
+      scrim.className = "jbh-confirm-scrim";
+      overlay.append(scrim, dialog);
+      document.body.appendChild(overlay);
+      if (useEffConfirm) {
+        document.body.appendChild(confirmBtn);
+        placeEffConfirm();
+        requestAnimationFrame(placeEffConfirm);
+      }
+    });
+  }
+
+  function forRunButtons(fn) {
+    for (const id of ["jbh-auto-btn", "jbh-eff-run-btn"]) {
+      const el = document.getElementById(id);
+      if (el) fn(el);
+    }
+  }
+
+  function beginRunButtons() {
+    forRunButtons((btn) => {
+      btn.classList.add("processing");
+      btn.disabled = true;
+      btn.style.background = "";
+      btn.style.color = "";
+      btn.style.opacity = "";
+      btn.style.cursor = "";
+    });
+  }
+
+  function setRunButtonsLabel(label) {
+    forRunButtons((btn) => {
+      btn.textContent = label;
+    });
+  }
+
+  function endRunButtons() {
+    forRunButtons((btn) => {
+      btn.classList.remove("processing");
+      btn.disabled = false;
     });
   }
 
   async function undoLastRun() {
+    if (runBusy) return;
     if (!lastRunData || !lastRunData.length) {
       notify("Nothing to undo.");
       return;
     }
 
+    runBusy = true;
     const undoBtn = document.getElementById("jbh-undo-btn");
     if (undoBtn) {
       undoBtn.disabled = true;
       undoBtn.textContent = "Undoing...";
     }
 
-    const runBtn = document.getElementById("jbh-auto-btn");
-    if (runBtn) {
-      runBtn.classList.add("processing");
-      runBtn.disabled = true;
-      runBtn.style.background = "";
-      runBtn.style.color = "";
-      runBtn.style.opacity = "";
-      runBtn.style.cursor = "";
-    }
+    beginRunButtons();
 
     try {
       for (let i = 0; i < lastRunData.length; i++) {
@@ -1267,7 +853,7 @@
         const btn = getAdjustButton(entry.container);
         if (!btn) continue;
 
-        if (runBtn) runBtn.textContent = `Undoing ${i + 1}/${lastRunData.length}...`;
+        setRunButtonsLabel(`Undoing ${i + 1}/${lastRunData.length}...`);
 
         btn.click();
         await sleep(220);
@@ -1282,7 +868,6 @@
           return;
         }
 
-        notify(`Reverted ${i + 1}/${lastRunData.length}: ${entry.name}`);
         await sleep(250);
       }
 
@@ -1290,28 +875,20 @@
       lastRunData = null;
       if (undoBtn) undoBtn.style.display = "none";
     } finally {
-      if (runBtn) {
-        runBtn.classList.remove("processing");
-        runBtn.disabled = false;
-      }
+      runBusy = false;
+      endRunButtons();
       if (undoBtn) {
         undoBtn.disabled = false;
         undoBtn.textContent = "Undo Last Run";
       }
+      updateUIState();
     }
   }
 
   async function autoFixZeros() {
-    // Set button to processing state (clear inline styles so CSS .processing class takes effect)
-    const runBtn = document.getElementById("jbh-auto-btn");
-    if (runBtn) {
-      runBtn.classList.add("processing");
-      runBtn.disabled = true;
-      runBtn.style.background = "";
-      runBtn.style.color = "";
-      runBtn.style.opacity = "";
-      runBtn.style.cursor = "";
-    }
+    if (runBusy) return;
+    runBusy = true;
+    beginRunButtons();
 
     try {
       for (let i = 0; i < 30; i++) {
@@ -1320,56 +897,12 @@
       }
 
       const containers = getProductContainers();
-
       if (!containers.length) {
         notify("No items found in this sale.");
         return;
       }
 
-    const flags = containers.map((c) => {
-      const nU = getProductName(c).toUpperCase();
-      const appleCare = isAppleCare(nU);
-      
-      // Pre-calculate context for dynamic AirPods
-      const _isAirPods = isAirPods(nU);
-      const _isPrimary = isAppleProduct(nU, c) || isMainNonAppleProduct(nU, c);
-      const _isRealPrimary = _isPrimary && !_isAirPods;
-
-      return { appleCare, _isAirPods, _isRealPrimary, _isPrimary };
-    });
-
-    // Context Calculations
-    const hasRealPrimaryProduct = flags.some(f => f._isRealPrimary);
-    
-    // Determine final role of each item (Primary vs Accessory)
-    const finalRoles = flags.map(f => {
-      let isPrimary = f._isPrimary;
-      if (f._isAirPods && hasRealPrimaryProduct) {
-        isPrimary = false; // Downgraded
-      }
-      return { ...f, isPrimary };
-    });
-
-    const primaryCount = finalRoles.filter(f => f.isPrimary).length;
-    const hasPrimary = primaryCount > 0;
-    
-    // "Apple Sold With Others" effectively means "Primary Sold With Non-Primary" in the new unified logic
-    // But legacy name kept for minimizing diff.
-    const ctx = {
-      saleItemCount: containers.length,
-      hasRealPrimaryProduct,
-      appleSoldWithOthers: hasPrimary && containers.length > primaryCount,
-      nonAppleMainSoldWithOthers: hasPrimary && containers.length > primaryCount, // Unified
-      appleCareSoldWithAppleAndOthers: false // Calculated below
-    };
-
-    const hasAppleCare = flags.some(f => f.appleCare);
-    const appleCareCount = flags.filter(f => f.appleCare).length;
-    
-    if (hasAppleCare && hasPrimary && containers.length > (primaryCount + appleCareCount)) {
-        ctx.appleCareSoldWithAppleAndOthers = true;
-    }
-
+    const ctx = buildSaleContext(containers);
     const onlyZeroOn = lsFlag(LS_KEY_ONLY_ZERO, true);
     const targets = onlyZeroOn
       ? containers.filter((c) => getOriginalComm(c) === 0)
@@ -1385,27 +918,20 @@
       return;
     }
 
-    // Confirmation dialog (if enabled)
     const confirmOn = lsFlag(LS_KEY_CONFIRM, true);
     if (confirmOn) {
       const preview = computeSalePreview();
       if (!preview) return;
       const confirmed = await showConfirmation(preview);
-      if (!confirmed) {
-        notify("Adjustment cancelled.");
-        return;
-      }
+      if (!confirmed) return;
     }
 
-    // Store original values for undo
     const undoEntries = targets.map(c => ({
       container: c,
       originalComm: getOriginalComm(c),
       saleTotal: getSaleTotal(c) || 0,
       name: getProductName(c)
     }));
-
-    notify(`Adjusting ${targets.length} items...`);
 
     const calcOn = lsFlag(LS_KEY_CALC);
     const reasonOn = lsFlag(LS_KEY_REASON);
@@ -1425,9 +951,6 @@
 
       const hasPresetNote = !!(computed.note && computed.note.trim());
       const nU = (computed.name || "").toUpperCase();
-      
-      // Determine if this specific item is acting as Main Product
-      // We use the same logic as computeCommission to check
       const _isAirPods = isAirPods(nU);
       let _isPrimary = isAppleProduct(nU, c) || isMainNonAppleProduct(nU, c);
       if (_isAirPods && ctx.hasRealPrimaryProduct) _isPrimary = false;
@@ -1454,8 +977,7 @@
         );
       }
 
-      // Update button with progress
-      if (runBtn) runBtn.textContent = `Adjusting ${i + 1}/${targets.length}...`;
+      setRunButtonsLabel(`Adjusting ${i + 1}/${targets.length}...`);
 
       btn.click();
       await sleep(220);
@@ -1471,81 +993,191 @@
         return;
       }
 
-      if (computed.keptOriginal) {
-        notify(`Kept original $${originalComm} for ${nU} (auto was lower).`);
-      } else {
-        const ratePct = fmtPercent(computed.rate) + "%";
-        notify(
-          `Adjusted ${i + 1}/${targets.length} → ${ratePct} for ${nU}`
-        );
-      }
-
       await sleep(250);
     }
 
-    // Save undo data
     lastRunData = undoEntries;
     const undoBtnEl = document.getElementById("jbh-undo-btn");
     if (undoBtnEl) undoBtnEl.style.display = "block";
 
     notify("Done ✅");
     } finally {
-      // Remove processing state
-      if (runBtn) {
-        runBtn.classList.remove("processing");
-        runBtn.disabled = false;
-      }
+      runBusy = false;
+      endRunButtons();
+      updateUIState();
     }
+  }
+
+  function getHostNextSaleBtn() {
+    for (const b of document.querySelectorAll('button[aria-label="View Next Sale"]')) {
+      if (b.id !== "jbh-eff-next-btn") return b;
+    }
+    return null;
+  }
+
+  function placeEffCluster(cluster, hostBtn) {
+    const r = hostBtn.getBoundingClientRect();
+    if (r.width === 0 && r.height === 0) {
+      cluster.style.visibility = "hidden";
+      return;
+    }
+    const w = cluster.offsetWidth || 260;
+    const h = cluster.offsetHeight || 36;
+    let left = r.left;
+    let top = r.top + (r.height - h) / 2;
+    left = Math.max(8, Math.min(left, window.innerWidth - w - 8));
+    top = Math.max(8, Math.min(top, window.innerHeight - h - 8));
+    cluster.style.left = `${left}px`;
+    cluster.style.top = `${top}px`;
+    cluster.style.visibility = "visible";
+  }
+
+  function lockEffClusterSoon(hostBtn) {
+    if (effClusterLocked) return;
+    clearTimeout(effLockTimer);
+    const startLeft = hostBtn.getBoundingClientRect().left;
+    effLockTimer = setTimeout(() => {
+      const host = getHostNextSaleBtn();
+      const cluster = document.getElementById("jbh-eff-cluster");
+      if (!host || !cluster) return;
+      const left = host.getBoundingClientRect().left;
+      if (Math.abs(left - startLeft) > 2) {
+        lockEffClusterSoon(host);
+        return;
+      }
+      placeEffCluster(cluster, host);
+      effClusterLocked = true;
+    }, 160);
+  }
+
+  function bindEffPosListeners() {
+    if (effPosListening) return;
+    effPosListening = true;
+    const onViewportChange = () => {
+      effClusterLocked = false;
+      syncEfficiencyButton();
+    };
+    window.addEventListener("resize", onViewportChange);
+    window.visualViewport?.addEventListener("resize", onViewportChange);
+  }
+
+  function removeEffCluster() {
+    clearTimeout(effLockTimer);
+    effLockTimer = null;
+    effClusterLocked = false;
+    document.getElementById("jbh-eff-cluster")?.remove();
+    document.documentElement.classList.remove("jbh-eff-on");
+  }
+
+  function syncEfficiencyButton(onOverview = isSaleOverview()) {
+    const hostNext = getHostNextSaleBtn();
+    const show = lsFlag(LS_KEY_EFFICIENCY) && !!hostNext && onOverview;
+
+    if (!show) {
+      removeEffCluster();
+      return;
+    }
+
+    document.documentElement.classList.add("jbh-eff-on");
+    bindEffPosListeners();
+
+    let cluster = document.getElementById("jbh-eff-cluster");
+    let nextBtn = document.getElementById("jbh-eff-next-btn");
+    let runBtn = document.getElementById("jbh-eff-run-btn");
+
+    if (!cluster) {
+      cluster = document.createElement("div");
+      cluster.id = "jbh-eff-cluster";
+      cluster.style.visibility = "hidden";
+
+      nextBtn = document.createElement("button");
+      nextBtn.id = "jbh-eff-next-btn";
+      nextBtn.className = "jbh-eff-btn";
+      nextBtn.type = "button";
+      nextBtn.textContent = "Next Sale";
+      nextBtn.addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        getHostNextSaleBtn()?.click();
+      });
+
+      runBtn = document.createElement("button");
+      runBtn.id = "jbh-eff-run-btn";
+      runBtn.className = "jbh-eff-btn";
+      runBtn.type = "button";
+      runBtn.textContent = "Run Adjustment";
+      runBtn.addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        autoFixZeros();
+      });
+
+      cluster.append(nextBtn, runBtn);
+      document.body.appendChild(cluster);
+    }
+
+    nextBtn.disabled = !!hostNext.disabled;
+
+    const main = document.getElementById("jbh-auto-btn");
+    if (main?.classList.contains("processing") || runBusy) {
+      runBtn.classList.add("processing");
+      runBtn.disabled = true;
+      if (main?.textContent) runBtn.textContent = main.textContent;
+    } else {
+      runBtn.classList.remove("processing");
+      runBtn.disabled = false;
+      runBtn.style.opacity = "";
+      runBtn.style.cursor = "";
+      runBtn.style.background = "";
+      runBtn.style.color = "";
+      if (runBtn.textContent !== "Run Adjustment") runBtn.textContent = "Run Adjustment";
+    }
+
+    if (effClusterLocked) return;
+    cluster.style.visibility = "hidden";
+    lockEffClusterSoon(hostNext);
   }
 
   function updateUIState() {
     const btn = document.getElementById("jbh-auto-btn");
-    if (!btn) return;
-
-    // Check if "Sale Overview" header exists in the DOM (safer than class jss808)
-    const headers = Array.from(document.querySelectorAll("h2"));
-    const isOnOverview = headers.some(h => h.textContent.includes("Sale Overview"));
-    
-    if (isOnOverview) {
-      // Don't overwrite button text during processing
-      if (!btn.classList.contains("processing") && btn.textContent !== "Run Adjustment") {
-        btn.textContent = "Run Adjustment";
-        btn.disabled = false;
-        btn.style.opacity = "1";
-        btn.style.cursor = "pointer";
-        btn.style.background = "";
-        btn.style.color = "";
-        btn.style.border = "";
+    const onOverview = isSaleOverview();
+    if (btn) {
+      if (onOverview) {
+        if (!btn.classList.contains("processing") && btn.textContent !== "Run Adjustment") {
+          btn.textContent = "Run Adjustment";
+          btn.disabled = false;
+          btn.style.opacity = "1";
+          btn.style.cursor = "pointer";
+          btn.style.background = "";
+          btn.style.color = "";
+          btn.style.border = "";
+        }
+      } else {
+        if (btn.textContent !== "Open a Sale to Adjust") {
+          btn.textContent = "Open a Sale to Adjust";
+          btn.disabled = true;
+          btn.style.opacity = "0.5";
+          btn.style.cursor = "not-allowed";
+          btn.style.background = "#444";
+          btn.style.color = "#aaa";
+          btn.style.border = "2px solid transparent";
+        }
+        lastRunData = null;
       }
-    } else {
-      if (btn.textContent !== "Open a Sale to Adjust") {
-        btn.textContent = "Open a Sale to Adjust";
-        btn.disabled = true;
-        btn.style.opacity = "0.5";
-        btn.style.cursor = "not-allowed";
-        btn.style.background = "#444";
-        btn.style.color = "#aaa";
-        btn.style.border = "2px solid transparent";
-      }
-      // Clear undo data when navigating away
-      lastRunData = null;
     }
 
-    // Update live sale summary
-    updateSaleSummary(isOnOverview);
-
-    // Update undo button visibility
+    updateSaleSummary(onOverview);
     const undoBtnEl = document.getElementById("jbh-undo-btn");
     if (undoBtnEl) {
-      undoBtnEl.style.display = (lastRunData && lastRunData.length && isOnOverview) ? "block" : "none";
+      undoBtnEl.style.display = lastRunData?.length && onOverview ? "block" : "none";
     }
+    syncEfficiencyButton(onOverview);
   }
 
   function updateSaleSummary(isOnOverview) {
     const summaryEl = document.getElementById("jbh-sale-summary");
     if (!summaryEl) return;
 
-    // Don't compute when collapsed or not on overview
     const wrap = document.getElementById("jbh-helper-wrap");
     if (!isOnOverview || (wrap && wrap.classList.contains("collapsed"))) {
       summaryEl.style.display = "none";
@@ -1559,579 +1191,243 @@
     }
 
     summaryEl.style.display = "block";
+    summaryEl.replaceChildren();
 
-    let html = '<div style="font-size:11px; font-weight:700; color:#888; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:8px; text-align:center;">Sale Preview</div>';
+    const skipped = preview.totalCount - preview.targetCount;
+    const head = el("div", "jbh-preview-head");
+    const total = el("span", "jbh-preview-total", formatSignedMoney(preview.targetTotal));
+    const meta = el(
+      "span",
+      "jbh-preview-meta",
+      `${preview.targetCount} to write${skipped ? ` · ${skipped} skip` : ""}`
+    );
+    head.append(total, meta);
+    summaryEl.appendChild(head);
 
     for (const item of preview.items) {
-      const rawName = item.name || "Unknown";
-      const name = rawName.length > 25 ? rawName.substring(0, 22) + "..." : rawName;
-      const fmtVal = formatSignedMoney(item.value);
-      const color = item.isTarget ? "#34C759" : "#666";
-      const opacity = item.isTarget ? "1" : "0.6";
-      const kept = item.keptOriginal ? " · kept" : "";
-      html += `<div style="display:flex; justify-content:space-between; font-size:11px; padding:2px 0; opacity:${opacity};">`;
-      html += `<span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1; margin-right:6px; color:#ccc;">${name}</span>`;
-      html += `<span style="flex-shrink:0; color:${color}; font-weight:600;">${fmtPercent(item.rate)}% = ${fmtVal}${kept}</span>`;
-      html += '</div>';
+      const row = el("div", item.isTarget ? "jbh-preview-row" : "jbh-preview-row is-skip");
+      row.append(
+        el("span", "jbh-preview-name", item.name || "Unknown"),
+        el(
+          "span",
+          "jbh-preview-val",
+          `${fmtPercent(item.rate)}%  ${formatSignedMoney(item.value)}${item.keptOriginal ? " · kept" : ""}`
+        )
+      );
+      summaryEl.appendChild(row);
     }
-
-    const writeFmt = formatSignedMoney(preview.targetTotal);
-    const skipped = preview.totalCount - preview.targetCount;
-    html += `<div style="margin-top:6px; padding-top:6px; border-top:1px solid rgba(255,255,255,0.1); text-align:center; font-size:12px; font-weight:700;">`;
-    html += `To write: <span style="color:#34C759">${writeFmt}</span>`;
-    html += ` <span style="color:#888; font-weight:400; font-size:11px;">(${preview.targetCount} to adjust)</span>`;
-    if (skipped > 0) {
-      html += `<div style="color:#888; font-weight:400; font-size:11px; margin-top:4px;">Sale preview ${formatSignedMoney(preview.total)} · ${skipped} unchanged</div>`;
-    }
-    html += '</div>';
-
-    summaryEl.innerHTML = html;
   }
 
-  // --- SINGLE ADJUSTMENT LOGIC ---
-  async function applySingleAdjustment(c, rate, noteOverride = null) {
+  async function applySingleAdjustment(c, rate, noteOverride = null, absoluteValue = null) {
     if (selectedReason === "Other" && !(selectedOtherText || "").trim()) {
-      notify("Please enter a comment when 'Other' is selected.");
-      return;
+      notify("Please enter a comment when Other is selected.");
+      return false;
     }
     const saleTotal = getSaleTotal(c) || 0;
-    const val = trunc3(saleTotal * rate);
-    
+    const val = absoluteValue != null ? trunc3(absoluteValue) : trunc3(saleTotal * rate);
     const btn = getAdjustButton(c);
     if (!btn) {
-        notify("Error: Adjust button not found");
-        return;
+      notify("Adjust button not found");
+      return false;
     }
 
-    const calcOn = lsFlag(LS_KEY_CALC);
-    const reasonOn = lsFlag(LS_KEY_REASON);
-
-    let commentText = "";
-    if (noteOverride) {
-        // Manual override
-        commentText = noteOverride;
-    } else {
-        // If using preset rate without explicit note, generate standard text
-        const pct = fmtPercent(rate) + "%";
-        if (calcOn) {
-             commentText = `${pct} of $${saleTotal} = $${val}`;
-        } else {
-             commentText = pct;
-        }
-        
-        if (reasonOn) {
-            // commentText += "\n\nManual Adjustment";
-        }
-    }
+    const pct = fmtPercent(rate) + "%";
+    const commentText = noteOverride
+      ? noteOverride
+      : lsFlag(LS_KEY_CALC)
+        ? `${pct} of $${saleTotal} = $${val}`
+        : pct;
 
     btn.click();
     await sleep(200);
     const ok = await fillAndSaveModal({
-        commissionValue: val,
-        commentText,
-        reasonLabel: selectedReason
+      commissionValue: val,
+      commentText,
+      reasonLabel: selectedReason,
     });
-    
-    if (ok) {
-        notify(`Applied ${fmtPercent(rate)}% to item`);
-    } else {
-        notify("Failed to apply adjustment");
-    }
+    notify(ok ? `Applied ${pct}` : "Failed to apply adjustment");
+    return ok;
   }
 
-  function syncReasonPills() {
-    document.querySelectorAll('.jbh-reason-pills').forEach(row => {
-      row.querySelectorAll('button[data-reason]').forEach(pill => {
-        const isActive = pill.dataset.reason === selectedReason;
-        pill.style.border = isActive ? "1px solid rgba(52,199,89,0.6)" : "1px solid rgba(255,255,255,0.12)";
-        pill.style.background = isActive ? "rgba(52,199,89,0.15)" : "rgba(255,255,255,0.06)";
-        pill.style.color = isActive ? "#34C759" : "#ccc";
-      });
+  function syncReasonUI() {
+    document.querySelectorAll(".jbh-reason-select").forEach((select) => {
+      if (select !== document.activeElement && select.value !== selectedReason) {
+        select.value = selectedReason;
+      }
     });
-    document.querySelectorAll('.jbh-reason-comment').forEach(input => {
-      input.placeholder = selectedReason === "Other" ? "Required when Other is selected" : "Optional";
+    document.querySelectorAll(".jbh-reason-comment").forEach((input) => {
+      input.placeholder = selectedReason === "Other" ? "Required for Other" : "Optional note";
       if (input !== document.activeElement && input.value !== selectedOtherText) {
         input.value = selectedOtherText;
       }
     });
   }
 
-  // --- INJECT INFO UI ---
+  function buildReasonFields() {
+    const box = el("div", "jbh-reason-box");
+    box.appendChild(el("div", "jbh-field-label", "Reason"));
+    const select = document.createElement("select");
+    select.className = "jbh-reason-select";
+    REASON_OPTIONS.forEach((reason) => {
+      const opt = document.createElement("option");
+      opt.value = reason;
+      opt.textContent = reason;
+      select.appendChild(opt);
+    });
+    select.value = selectedReason;
+    select.addEventListener("change", () => {
+      selectedReason = select.value;
+      localStorage.setItem(LS_KEY_REASON_SELECT, selectedReason);
+      syncReasonUI();
+    });
+    select.addEventListener("click", (e) => e.stopPropagation());
+    const comment = document.createElement("input");
+    comment.type = "text";
+    comment.className = "jbh-reason-comment";
+    comment.value = selectedOtherText;
+    comment.placeholder = selectedReason === "Other" ? "Required for Other" : "Optional note";
+    comment.addEventListener("input", () => {
+      selectedOtherText = comment.value;
+      localStorage.setItem(LS_KEY_REASON_OTHER_TEXT, selectedOtherText);
+      syncReasonUI();
+    });
+    comment.addEventListener("click", (e) => e.stopPropagation());
+    box.append(select, comment);
+    return box;
+  }
+
+  function commissionTrackingId(r) {
+    return `${r.name}|${r.rate}|${r.value}|${r.keptOriginal ? 1 : 0}`;
+  }
+
   function injectRowInfo() {
-    // Only run on Overview page
-    const headers = Array.from(document.querySelectorAll("h2"));
-    if (!headers.some(h => h.textContent.includes("Sale Overview"))) {
-      // Clean up any orphaned UI elements when not on Overview page
-      $$('.jbh-row-info').forEach(el => el.remove());
+    if (!isSaleOverview()) {
+      $$(".jbh-row-info").forEach((el) => el.remove());
       return;
     }
 
     const containers = getProductContainers();
     if (!containers.length) {
-      // If no containers, remove all UI elements
-      $$('.jbh-row-info').forEach(el => el.remove());
+      $$(".jbh-row-info").forEach((el) => el.remove());
       return;
     }
 
-    // Calculate context once (needed for computeCommission)
-    const flags = containers.map((c) => {
-      const nU = getProductName(c).toUpperCase();
-      const appleCare = isAppleCare(nU);
-      const _isAirPods = isAirPods(nU);
-      const _isPrimary = isAppleProduct(nU, c) || isMainNonAppleProduct(nU, c);
-      const _isRealPrimary = _isPrimary && !_isAirPods;
-      return { appleCare, _isAirPods, _isRealPrimary, _isPrimary };
-    });
+    const ctx = buildSaleContext(containers);
+    const computedRows = containers.map((c) => ({
+      c,
+      result: finalizeCommission(computeCommission(c, ctx), c),
+    }));
+    const currentTrackingIds = new Set(
+      computedRows.filter((row) => row.result).map((row) => commissionTrackingId(row.result))
+    );
 
-    const hasRealPrimaryProduct = flags.some(f => f._isRealPrimary);
-    const finalRoles = flags.map(f => {
-        let isPrimary = f._isPrimary;
-        if (f._isAirPods && hasRealPrimaryProduct) isPrimary = false;
-        return { ...f, isPrimary };
-    });
-    const primaryCount = finalRoles.filter(f => f.isPrimary).length;
-    const hasPrimary = primaryCount > 0;
-    
-    const ctx = {
-      saleItemCount: containers.length,
-      hasRealPrimaryProduct,
-      appleSoldWithOthers: hasPrimary && containers.length > primaryCount,
-      nonAppleMainSoldWithOthers: hasPrimary && containers.length > primaryCount,
-      appleCareSoldWithAppleAndOthers: false
-    };
-    
-    const hasAppleCare = flags.some(f => f.appleCare);
-    const appleCareCount = flags.filter(f => f.appleCare).length;
-    if (hasAppleCare && hasPrimary && containers.length > (primaryCount + appleCareCount)) {
-        ctx.appleCareSoldWithAppleAndOthers = true;
-    }
-
-    // Pre-compute tracking IDs for all current containers to identify orphaned elements
-    // This allows us to preserve matching UI elements while cleaning up stale ones
-    const currentTrackingIds = new Set();
-    containers.forEach((c) => {
-      const result = finalizeCommission(computeCommission(c, ctx), c);
-      if (result) {
-        const trackingId = `${result.name}|${result.rate}|${result.value}|${result.keptOriginal ? 1 : 0}`;
-        currentTrackingIds.add(trackingId);
-      }
-    });
-
-    // Remove only UI elements that don't match any current container's tracking ID
-    // This preserves matching elements for the optimization check in the loop
-    $$('.jbh-row-info').forEach(el => {
-      const trackingId = el.dataset.trackingId;
-      if (!trackingId || !currentTrackingIds.has(trackingId)) {
+    $$(".jbh-row-info").forEach((el) => {
+      if (isInHostModal(el) || !el.dataset.trackingId || !currentTrackingIds.has(el.dataset.trackingId)) {
         el.remove();
       }
     });
 
-    // Inject info
-    // We disconnect observer to prevent infinite loops during DOM manipulation
     if (obs) obs.disconnect();
 
     try {
-        containers.forEach((c) => {
-            const result = finalizeCommission(computeCommission(c, ctx), c);
-            if (!result) return;
+        computedRows.forEach(({ c, result }) => {
+            if (!result || isInHostModal(c)) return;
 
-            const trackingId = `${result.name}|${result.rate}|${result.value}|${result.keptOriginal ? 1 : 0}`;
+            const trackingId = commissionTrackingId(result);
 
-            // Check for existing UI placed after the container (sibling)
             const nextEl = c.nextElementSibling;
-            if (nextEl && nextEl.classList.contains('jbh-row-info')) {
-                // If UI exists and matches current data and has full structure (e.g. comment box), skip
-                if (nextEl.dataset.trackingId === trackingId && nextEl.querySelector('.jbh-reason-comment')) {
-                    return;
-                }
-                // If UI exists but stale or missing new elements, remove so we rebuild
-                nextEl.remove();
+            if (nextEl && nextEl.classList.contains("jbh-row-info")) {
+              if (nextEl.dataset.trackingId === trackingId && nextEl.querySelector(".jbh-reason-comment")) {
+                return;
+              }
+              nextEl.remove();
             }
 
-            // Content Building
-            let bundleStatus = "";
-            if (ctx.appleCareSoldWithAppleAndOthers && result.multiplier === 2.5) bundleStatus = "AC Multiplier (2.5x)";
-            else if (result.multiplier === 2) bundleStatus = "IPS Multiplier (2x)";
-            else if (ctx.hasRealPrimaryProduct && isAirPods(result.name)) bundleStatus = "Attached (AirPods)";
+            let kicker = result.label || "Suggested";
+            if (result.keptOriginal) kicker = "Kept original";
+            else if (ctx.appleCareSoldWithAppleAndOthers && result.multiplier === 2.5) kicker += " · AC ×2.5";
+            else if (result.multiplier === 2) kicker += " · IPS ×2";
+            else if (ctx.hasRealPrimaryProduct && isAirPods(result.name)) kicker += " · attached";
 
-            const infoDiv = document.createElement("div");
-            infoDiv.className = "jbh-row-info";
+            const infoDiv = el("div", "jbh-row-info");
             infoDiv.dataset.trackingId = trackingId;
-            Object.assign(infoDiv.style, {
-                marginTop: "12px",
-                padding: "16px 20px",
-                background: THEME.bg,
-                backdropFilter: `blur(${THEME.blur})`,
-                border: THEME.border,
-                borderRadius: THEME.radius,
-                fontSize: "13px",
-                color: THEME.textMain,
-                display: "flex",
-                flexDirection: "column",
-                gap: "14px",
-                width: "100%",
-                boxSizing: "border-box",
-                boxShadow: THEME.shadow,
-                fontFamily: '-apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Roboto, sans-serif',
-                position: "relative",
-                overflow: "hidden",
+
+            const main = el("div", "jbh-row-main");
+            const suggest = el("div", "jbh-row-suggest");
+            suggest.append(
+              el("div", "jbh-row-kicker", kicker),
+              el("div", result.value < 0 ? "jbh-row-value is-neg" : "jbh-row-value",
+                `${fmtPercent(result.rate)}%   ${formatSignedMoney(result.value)}`)
+            );
+
+            const applyBtn = el("button", "jbh-apply-btn", "Apply");
+            applyBtn.type = "button";
+            applyBtn.addEventListener("click", async (e) => {
+              e.stopPropagation();
+              applyBtn.disabled = true;
+              applyBtn.textContent = "…";
+              await applySingleAdjustment(c, result.rate, null, result.value);
+              applyBtn.disabled = false;
+              applyBtn.textContent = "Apply";
             });
 
-            // Noise overlay for liquid glass texture
-            const noiseOverlay = document.createElement("div");
-            Object.assign(noiseOverlay.style, {
-                position: "absolute",
-                top: "0", left: "0", right: "0", bottom: "0",
-                backgroundImage: THEME.noise,
-                opacity: THEME.noiseOpacity,
-                pointerEvents: "none",
-                zIndex: "0",
-            });
-            infoDiv.appendChild(noiseOverlay);
+            main.append(suggest, applyBtn);
+            infoDiv.appendChild(main);
+            infoDiv.appendChild(buildReasonFields());
 
-            const dispValue = result.value;
-            const formattedValue = formatSignedMoney(dispValue);
-            const valueColor = dispValue < 0 ? "#FF453A" : THEME.accent;
-
-            // === TOP ROW: Suggested adjustment (horizontal) ===
-            const topRow = document.createElement("div");
-            Object.assign(topRow.style, {
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "space-between",
-                paddingBottom: "12px",
-                borderBottom: "1px solid rgba(255,255,255,0.05)",
-                position: "relative",
-                zIndex: "1",
-            });
-            const suggestLabel = document.createElement("div");
-            suggestLabel.innerHTML = `<span style="font-weight:600; font-size:11px; text-transform:uppercase; letter-spacing:1px; color:${THEME.textDim};">Suggested</span><div style="color:${valueColor}; font-weight:700; font-size:16px; margin-top:2px;">${fmtPercent(result.rate)}% = ${formattedValue}</div>`;
-            topRow.appendChild(suggestLabel);
-            const badgeWrap = document.createElement("div");
-            Object.assign(badgeWrap.style, {
-                display: "flex",
-                flexWrap: "wrap",
-                gap: "6px",
-                justifyContent: "flex-end",
-                marginLeft: "12px",
-            });
-            const addBadge = (text, warn) => {
-                const badge = document.createElement("span");
-                Object.assign(badge.style, {
-                    fontSize: "10px",
-                    fontWeight: "600",
-                    textTransform: "uppercase",
-                    letterSpacing: "0.5px",
-                    color: warn ? "#FF9F0A" : THEME.textDark,
-                    background: warn ? "rgba(255, 159, 10, 0.12)" : "rgba(255, 255, 255, 0.05)",
-                    padding: "4px 8px",
-                    borderRadius: "6px",
-                    whiteSpace: "nowrap",
-                });
-                badge.textContent = text;
-                badgeWrap.appendChild(badge);
-            };
-            if (result.keptOriginal) addBadge("Kept original", true);
-            if (bundleStatus) addBadge(bundleStatus, false);
-            if (badgeWrap.childNodes.length) topRow.appendChild(badgeWrap);
-            infoDiv.appendChild(topRow);
-
-            // === REASON SELECTOR ===
-            const reasonSection = document.createElement("div");
-            Object.assign(reasonSection.style, {
-                display: "flex",
-                flexDirection: "column",
-                gap: "10px",
-                paddingBottom: "12px",
-                borderBottom: "1px solid rgba(255,255,255,0.05)",
-                position: "relative",
-                zIndex: "1",
-            });
-            const reasonHeader = document.createElement("div");
-            reasonHeader.textContent = "Reason";
-            Object.assign(reasonHeader.style, {
-                fontSize: "10px",
-                fontWeight: "600",
-                color: THEME.textDark,
-                textTransform: "uppercase",
-                letterSpacing: "1px",
-            });
-            reasonSection.appendChild(reasonHeader);
-
-            const pillRow = document.createElement("div");
-            pillRow.className = "jbh-reason-pills";
-            Object.assign(pillRow.style, {
-                display: "flex",
-                flexWrap: "wrap",
-                gap: "8px",
+            const more = el("div", "jbh-row-more");
+            more.appendChild(el("div", "jbh-field-label", "Other rates"));
+            const pctRow = el("div", "jbh-pct-row");
+            [0.002, 0.005, 0.01, 0.015, 0.02, 0.023, 0.05].forEach((rate) => {
+              const b = el("button", "jbh-pct-btn", fmtPercent(rate) + "%");
+              b.type = "button";
+              b.addEventListener("click", async (e) => {
+                e.stopPropagation();
+                b.disabled = true;
+                await applySingleAdjustment(c, rate);
+                b.disabled = false;
+              });
+              pctRow.appendChild(b);
             });
 
-            REASON_OPTIONS.forEach(reason => {
-                const pill = document.createElement("button");
-                pill.textContent = reason;
-                pill.dataset.reason = reason;
-                const isActive = reason === selectedReason;
-                Object.assign(pill.style, {
-                    border: isActive ? `1px solid ${THEME.accent}44` : "1px solid rgba(255,255,255,0.08)",
-                    background: isActive ? `${THEME.accent}15` : "rgba(255,255,255,0.03)",
-                    borderRadius: "20px",
-                    padding: "6px 14px",
-                    cursor: "pointer",
-                    fontSize: "11px",
-                    fontWeight: "500",
-                    color: isActive ? THEME.accent : THEME.textDim,
-                    transition: "all 0.2s cubic-bezier(0.4, 0, 0.2, 1)",
-                    whiteSpace: "nowrap",
-                });
-                pill.addEventListener("mouseenter", () => {
-                    if (pill.dataset.reason !== selectedReason) {
-                        pill.style.background = "rgba(255,255,255,0.08)";
-                        pill.style.borderColor = "rgba(255,255,255,0.15)";
-                        pill.style.color = "#fff";
-                    }
-                });
-                pill.addEventListener("mouseleave", () => {
-                    if (pill.dataset.reason !== selectedReason) {
-                        pill.style.background = "rgba(255,255,255,0.03)";
-                        pill.style.borderColor = "rgba(255,255,255,0.08)";
-                        pill.style.color = THEME.textDim;
-                    }
-                });
-                pill.addEventListener("click", (e) => {
-                    e.stopPropagation();
-                    selectedReason = reason;
-                    localStorage.setItem(LS_KEY_REASON_SELECT, reason);
-                    syncReasonPills();
-                });
-                pillRow.appendChild(pill);
-            });
-
-            reasonSection.appendChild(pillRow);
-
-            // Comment box: always visible; optional normally, required when "Other" is selected
-            const commentWrap = document.createElement("div");
-            commentWrap.className = "jbh-comment-wrap";
-            Object.assign(commentWrap.style, {
-                width: "100%",
-                marginTop: "10px",
-                flexShrink: "0",
-                display: "block",
-                minHeight: "50px",
-            });
-            const commentLabel = document.createElement("div");
-            commentLabel.textContent = "Comment";
-            Object.assign(commentLabel.style, {
-                fontSize: "10px",
-                fontWeight: "600",
-                color: THEME.textDark,
-                textTransform: "uppercase",
-                letterSpacing: "1px",
-                marginBottom: "6px",
-            });
-            commentWrap.appendChild(commentLabel);
-            const commentInput = document.createElement("input");
-            commentInput.type = "text";
-            commentInput.className = "jbh-reason-comment";
-            commentInput.placeholder = selectedReason === "Other" ? "Required when Other is selected" : "Optional";
-            commentInput.value = selectedOtherText;
-            Object.assign(commentInput.style, {
-                width: "100%",
-                padding: "10px 12px",
-                border: "2px solid rgba(255,255,255,0.2)",
-                borderRadius: "10px",
-                background: "rgba(255,255,255,0.08)",
-                color: THEME.textMain,
-                fontSize: "13px",
-                outline: "none",
-                boxSizing: "border-box",
-                transition: "border-color 0.2s, box-shadow 0.2s",
-                minHeight: "40px",
-                display: "block",
-            });
-            commentInput.addEventListener("focus", () => {
-                commentInput.style.borderColor = THEME.accent;
-                commentInput.style.boxShadow = `0 0 0 1px ${THEME.accent}33`;
-            });
-            commentInput.addEventListener("blur", () => {
-                commentInput.style.borderColor = "rgba(255,255,255,0.2)";
-                commentInput.style.boxShadow = "none";
-            });
-            commentInput.addEventListener("input", () => {
-                selectedOtherText = commentInput.value;
-                localStorage.setItem(LS_KEY_REASON_OTHER_TEXT, selectedOtherText);
-                syncReasonPills();
-            });
-            commentInput.addEventListener("click", (e) => e.stopPropagation());
-            commentWrap.appendChild(commentInput);
-            reasonSection.appendChild(commentWrap);
-
-            infoDiv.appendChild(reasonSection);
-
-            // === MANUAL OVERRIDE SECTION ===
-            const overrideSection = document.createElement("div");
-            Object.assign(overrideSection.style, {
-                display: "flex",
-                flexDirection: "column",
-                gap: "10px",
-                position: "relative",
-                zIndex: "1",
-            });
-            const overrideHeader = document.createElement("div");
-            overrideHeader.textContent = "Manual Override";
-            Object.assign(overrideHeader.style, {
-                fontSize: "10px",
-                fontWeight: "600",
-                color: THEME.textDark,
-                textTransform: "uppercase",
-                letterSpacing: "1px",
-            });
-            overrideSection.appendChild(overrideHeader);
-
-            const btnRow = document.createElement("div");
-            Object.assign(btnRow.style, {
-                display: "grid",
-                gridTemplateColumns: "repeat(7, minmax(0, 1fr))",
-                gap: "8px",
-            });
-
-            const pcts = [0.002, 0.005, 0.01, 0.015, 0.02, 0.023, 0.05];
-            pcts.forEach(rate => {
-                const btn = document.createElement("button");
-                btn.textContent = fmtPercent(rate) + "%";
-                Object.assign(btn.style, {
-                    border: "1px solid rgba(255,255,255,0.05)",
-                    background: "rgba(255,255,255,0.03)",
-                    borderRadius: "10px",
-                    padding: "10px 0",
-                    cursor: "pointer",
-                    fontSize: "12px",
-                    fontWeight: "600",
-                    color: "#fff",
-                    transition: "all 0.2s cubic-bezier(0.4, 0, 0.2, 1)",
-                    textAlign: "center",
-                });
-                btn.addEventListener("mouseenter", () => {
-                    btn.style.background = "rgba(255,255,255,0.08)";
-                    btn.style.transform = "translateY(-2px)";
-                    btn.style.borderColor = "rgba(255,255,255,0.1)";
-                });
-                btn.addEventListener("mouseleave", () => {
-                    btn.style.background = "rgba(255,255,255,0.03)";
-                    btn.style.transform = "translateY(0)";
-                    btn.style.borderColor = "rgba(255,255,255,0.05)";
-                });
-                btn.addEventListener("click", async (e) => {
-                    e.stopPropagation();
-                    btn.textContent = "...";
-                    btn.style.color = THEME.textDark;
-                    btn.disabled = true;
-                    await applySingleAdjustment(c, rate);
-                    btn.disabled = false;
-                    btn.style.color = "#fff";
-                    btn.textContent = fmtPercent(rate) + "%";
-                });
-                btnRow.appendChild(btn);
-            });
-            overrideSection.appendChild(btnRow);
-
-            // Bottom controls: Custom input + Reset
-            const bottomControls = document.createElement("div");
-            Object.assign(bottomControls.style, {
-                display: "flex",
-                gap: "8px",
-                alignItems: "center",
-            });
-
-            const customInput = document.createElement("input");
+            const extra = el("div", "jbh-row-extra");
+            const customInput = el("input", "jbh-custom-input");
             customInput.type = "text";
             customInput.placeholder = "Custom %";
-            customInput.className = "jbh-custom-input";
-            Object.assign(customInput.style, {
-                flex: "1",
-                padding: "8px 12px",
-                border: "1px solid rgba(255,255,255,0.08)",
-                borderRadius: "10px",
-                background: "rgba(255,255,255,0.03)",
-                color: "#fff",
-                fontSize: "12px",
-                outline: "none",
-                boxSizing: "border-box",
-                transition: "border-color 0.2s",
-            });
-            customInput.addEventListener("focus", () => { customInput.style.borderColor = THEME.accent; });
-            customInput.addEventListener("blur", () => { customInput.style.borderColor = "rgba(255,255,255,0.08)"; });
-            customInput.addEventListener("keydown", async (e) => {
-                if (e.key !== "Enter") return;
-                e.preventDefault();
-                e.stopPropagation();
-                let rawVal = customInput.value.trim();
-                if (!rawVal) return;
-                rawVal = rawVal.replace(/%$/, "");
-                const pct = parseFloat(rawVal);
-                if (isNaN(pct) || pct < 0 || pct > 100) {
-                    notify("Invalid percentage (0-100)");
-                    return;
-                }
-                const rate = pct / 100;
-                customInput.disabled = true;
-                customInput.value = "Applying...";
-                await applySingleAdjustment(c, rate);
-                customInput.disabled = false;
-                customInput.value = "";
-            });
             customInput.addEventListener("click", (e) => e.stopPropagation());
-            bottomControls.appendChild(customInput);
+            customInput.addEventListener("keydown", async (e) => {
+              if (e.key !== "Enter") return;
+              e.preventDefault();
+              e.stopPropagation();
+              const raw = customInput.value.trim().replace(/%$/, "");
+              const pct = parseFloat(raw);
+              if (!raw || Number.isNaN(pct) || pct < 0 || pct > 100) {
+                notify("Enter a % between 0 and 100");
+                return;
+              }
+              customInput.disabled = true;
+              await applySingleAdjustment(c, pct / 100);
+              customInput.disabled = false;
+              customInput.value = "";
+            });
 
-            const resetBtn = document.createElement("button");
-            resetBtn.textContent = "Reset to $0";
-            Object.assign(resetBtn.style, {
-                border: "1px solid rgba(255, 69, 58, 0.2)",
-                background: "rgba(255, 69, 58, 0.05)",
-                borderRadius: "10px",
-                padding: "8px 16px",
-                cursor: "pointer",
-                fontSize: "11px",
-                fontWeight: "700",
-                color: "#FF453A",
-                transition: "all 0.2s cubic-bezier(0.4, 0, 0.2, 1)",
-                textAlign: "center",
-                whiteSpace: "nowrap",
-                flexShrink: "0",
-                textTransform: "uppercase",
-                letterSpacing: "0.5px",
-            });
-            resetBtn.addEventListener("mouseenter", () => {
-                resetBtn.style.background = "rgba(255, 69, 58, 0.15)";
-                resetBtn.style.transform = "translateY(-2px)";
-                resetBtn.style.borderColor = "rgba(255, 69, 58, 0.4)";
-            });
-            resetBtn.addEventListener("mouseleave", () => {
-                resetBtn.style.background = "rgba(255, 69, 58, 0.05)";
-                resetBtn.style.transform = "translateY(0)";
-                resetBtn.style.borderColor = "rgba(255, 69, 58, 0.2)";
-            });
+            const resetBtn = el("button", "jbh-reset-btn", "Reset $0");
+            resetBtn.type = "button";
             resetBtn.addEventListener("click", async (e) => {
-                e.stopPropagation();
-                resetBtn.textContent = "...";
-                resetBtn.disabled = true;
-                await applySingleAdjustment(c, 0, "Reset to $0");
-                resetBtn.disabled = false;
-                resetBtn.textContent = "Reset to $0";
+              e.stopPropagation();
+              resetBtn.disabled = true;
+              await applySingleAdjustment(c, 0, "Reset to $0");
+              resetBtn.disabled = false;
             });
-            bottomControls.appendChild(resetBtn);
 
-            overrideSection.appendChild(bottomControls);
-            infoDiv.appendChild(overrideSection);
-
-            // Injection Point: Insert as sibling AFTER the product container
-            // This ensures the info card is never clipped by the container's
-            // overflow or height constraints on any screen size
-            c.insertAdjacentElement('afterend', infoDiv);
+            extra.append(customInput, resetBtn);
+            more.append(pctRow, extra);
+            infoDiv.appendChild(more);
+            c.insertAdjacentElement("afterend", infoDiv);
         });
     } catch(e) {
         console.error("JBH Helper Error:", e);
     } finally {
-        // Reconnect observer
         if (obs) obs.observe(document.documentElement, { childList: true, subtree: true });
     }
   }
@@ -2151,6 +1447,8 @@
             position: fixed;
             right: 20px;
             bottom: 20px;
+            left: auto;
+            top: auto;
             z-index: 2147483647;
             display: flex;
             flex-direction: row;
@@ -2174,7 +1472,7 @@
             border: ${THEME.border};
             box-shadow: ${THEME.shadow};
             color: ${THEME.textMain};
-            min-width: 220px;
+            min-width: 260px;
             min-height: 150px;
             max-width: 90vw;
             max-height: 90vh;
@@ -2195,182 +1493,12 @@
         #jbh-dock.dragging #jbh-helper-wrap {
             cursor: grabbing !important;
             box-shadow: ${THEME.shadowLift};
-            transform: scale(1.02);
-            transition: transform 0.2s, box-shadow 0.2s;
         }
 
         #jbh-helper-wrap.resizing {
             cursor: nwse-resize !important;
         }
 
-        #jbh-calc-wrap {
-            display: flex;
-            flex-direction: column;
-            width: 216px;
-            flex-shrink: 0;
-            background: ${THEME.bg};
-            backdrop-filter: blur(${THEME.blur});
-            border-radius: ${THEME.radius};
-            border: ${THEME.border};
-            box-shadow: ${THEME.shadow};
-            color: ${THEME.textMain};
-            overflow: hidden;
-            position: relative;
-        }
-        #jbh-calc-wrap::before {
-            content: "";
-            position: absolute;
-            top: 0; left: 0; right: 0; bottom: 0;
-            background-image: ${THEME.noise};
-            opacity: ${THEME.noiseOpacity};
-            pointer-events: none;
-            z-index: 0;
-        }
-        #jbh-calc-wrap > * {
-            position: relative;
-            z-index: 1;
-        }
-        #jbh-calc-launcher {
-            display: none;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            width: 56px;
-            height: 56px;
-            min-height: 56px;
-            padding: 0;
-            flex-shrink: 0;
-            cursor: pointer;
-            font-family: inherit;
-            color: rgba(255, 255, 255, 0.5);
-            background: #000000;
-            backdrop-filter: blur(${THEME.blur});
-            border-radius: 10px;
-            border: 1px solid rgba(255, 255, 255, 0.1);
-            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.06);
-            transition: color 0.22s ease, border-color 0.22s ease, background 0.22s ease,
-                box-shadow 0.22s ease, transform 0.18s ease;
-        }
-        #jbh-calc-launcher svg {
-            width: 28px;
-            height: 28px;
-            flex-shrink: 0;
-            display: block;
-            filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.35));
-            transition: filter 0.22s ease, transform 0.18s ease;
-        }
-        #jbh-calc-launcher:hover {
-            color: ${THEME.accent};
-            background: linear-gradient(
-                160deg,
-                rgba(52, 199, 89, 0.14) 0%,
-                rgba(52, 199, 89, 0.05) 45%,
-                rgba(255, 255, 255, 0.04) 100%
-            );
-            border-color: rgba(52, 199, 89, 0.45);
-            box-shadow:
-                0 0 0 1px rgba(52, 199, 89, 0.25),
-                0 6px 22px rgba(52, 199, 89, 0.12),
-                0 12px 28px rgba(0, 0, 0, 0.35),
-                inset 0 1px 0 rgba(255, 255, 255, 0.08);
-            transform: translateY(-1px);
-        }
-        #jbh-calc-launcher:hover svg {
-            filter: drop-shadow(0 0 6px rgba(52, 199, 89, 0.45));
-        }
-        #jbh-calc-launcher:active {
-            transform: translateY(0);
-            background: #0a0a0a;
-            box-shadow:
-                0 0 0 1px rgba(52, 199, 89, 0.2),
-                0 2px 10px rgba(0, 0, 0, 0.5),
-                inset 0 1px 2px rgba(0, 0, 0, 0.35);
-        }
-        .jbh-calc-head {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding: 10px 12px;
-            border-bottom: 1px solid rgba(255,255,255,0.06);
-            flex-shrink: 0;
-        }
-        .jbh-calc-title {
-            font-size: 10px;
-            font-weight: 600;
-            letter-spacing: 1px;
-            text-transform: uppercase;
-            color: ${THEME.textDim};
-        }
-        .jbh-calc-close {
-            background: none;
-            border: none;
-            color: ${THEME.textDim};
-            cursor: pointer;
-            font-size: 16px;
-            line-height: 1;
-            padding: 2px 6px;
-            border-radius: 8px;
-            transition: color 0.2s, background 0.2s;
-        }
-        .jbh-calc-close:hover {
-            color: #fff;
-            background: rgba(255,255,255,0.08);
-        }
-        #jbh-calc-result {
-            width: 100%;
-            box-sizing: border-box;
-            padding: 8px 12px;
-            font-size: 18px;
-            font-weight: 700;
-            color: ${THEME.accent};
-            background: rgba(0,0,0,0.2);
-            border: none;
-            border-bottom: 1px solid rgba(255,255,255,0.06);
-            font-variant-numeric: tabular-nums;
-        }
-        #jbh-calc-expr {
-            width: 100%;
-            box-sizing: border-box;
-            padding: 10px 12px;
-            font-size: 14px;
-            font-weight: 500;
-            color: ${THEME.textMain};
-            background: rgba(255,255,255,0.05);
-            border: none;
-            border-bottom: 1px solid rgba(255,255,255,0.06);
-            outline: none;
-            font-variant-numeric: tabular-nums;
-        }
-        #jbh-calc-expr:focus {
-            box-shadow: inset 0 0 0 1px ${THEME.accent}44;
-        }
-        .jbh-calc-keys {
-            display: grid;
-            grid-template-columns: repeat(4, 1fr);
-            gap: 6px;
-            padding: 10px;
-        }
-        .jbh-calc-keys button {
-            padding: 10px 0;
-            font-size: 14px;
-            font-weight: 600;
-            border: 1px solid rgba(255,255,255,0.08);
-            border-radius: 10px;
-            background: rgba(255,255,255,0.05);
-            color: #fff;
-            cursor: pointer;
-            transition: background 0.15s, transform 0.1s;
-            font-family: inherit;
-        }
-        .jbh-calc-keys button:hover {
-            background: rgba(255,255,255,0.1);
-        }
-        .jbh-calc-keys button:active {
-            transform: scale(0.96);
-        }
-        .jbh-calc-keys .jbh-calc-wide {
-            grid-column: span 2;
-        }
         #jbh-helper-wrap .jbh-row input[type="checkbox"] {
             position: absolute;
             opacity: 0;
@@ -2397,63 +1525,6 @@
 
         .jbh-drag-handle:hover {
             background: rgba(255, 255, 255, 0.06);
-        }
-
-        .jbh-resize-handle.s {
-            bottom: 0;
-            left: 0;
-            right: 0;
-            height: 8px;
-            cursor: ns-resize;
-        }
-
-        .jbh-resize-handle.e {
-            top: 0;
-            right: 0;
-            bottom: 0;
-            width: 8px;
-            cursor: ew-resize;
-        }
-
-        .jbh-resize-handle.w {
-            top: 0;
-            left: 0;
-            bottom: 0;
-            width: 8px;
-            cursor: ew-resize;
-        }
-
-        .jbh-resize-handle.ne {
-            top: 0;
-            right: 0;
-            width: 16px;
-            height: 16px;
-            cursor: nesw-resize;
-        }
-
-        .jbh-resize-handle.nw {
-            top: 0;
-            left: 0;
-            width: 16px;
-            height: 16px;
-            cursor: nwse-resize;
-        }
-
-        .jbh-resize-handle.se {
-            bottom: 0;
-            right: 0;
-            width: 16px;
-            height: 16px;
-            cursor: nwse-resize;
-        }
-
-        .jbh-resize-handle.sw {
-            bottom: 0;
-            left: 0;
-            white-space: nowrap;
-            width: 16px;
-            height: 16px;
-            cursor: nesw-resize;
         }
 
         .jbh-content {
@@ -2517,12 +1588,14 @@
         .jbh-resize-handle.e { top: 0; right: 0; bottom: 0; width: 8px; cursor: ew-resize; }
         .jbh-resize-handle.w { top: 0; left: 0; bottom: 0; width: 8px; cursor: ew-resize; }
         .jbh-resize-handle.ne { top: 0; right: 0; width: 16px; height: 16px; cursor: nesw-resize; }
+        .jbh-resize-handle.nw { top: 0; left: 0; width: 16px; height: 16px; cursor: nwse-resize; }
+        .jbh-resize-handle.se { bottom: 0; right: 0; width: 16px; height: 16px; cursor: nwse-resize; }
+        .jbh-resize-handle.sw { bottom: 0; left: 0; width: 16px; height: 16px; cursor: nesw-resize; }
         #jbh-auto-btn.processing:hover {
             background: #FF9500;
             transform: translateY(0);
         }
 
-        /* COLLAPSED STATE */
         #jbh-helper-wrap.collapsed {
             min-height: auto;
             height: auto !important;
@@ -2549,8 +1622,6 @@
             color: #fff;
         }
 
-        .jbh-resize-handle.nw { top: 0; left: 0; width: 16px; height: 16px; cursor: nwse-resize; }
-        /* CUSTOM RATE INPUT - glass */
         .jbh-custom-input {
             flex: 1;
             background: rgba(255, 255, 255, 0.05);
@@ -2571,9 +1642,6 @@
         .jbh-custom-input::placeholder {
             color: ${THEME.textDark};
         }
-
-        .jbh-resize-handle.se { bottom: 0; right: 0; width: 16px; height: 16px; cursor: nwse-resize; }
-        .jbh-resize-handle.sw { bottom: 0; left: 0; width: 16px; height: 16px; cursor: nesw-resize; }
 
         @keyframes jbh-fade-in {
             from { opacity: 0; transform: translateY(15px) scale(0.98); }
@@ -2598,9 +1666,8 @@
             justify-content: center;
             flex-shrink: 0;
         }
-
         .jbh-drag-icon::before {
-            content: '⋮⋮';
+            content: "⋮⋮";
             font-size: 12px;
             color: #fff;
         }
@@ -2625,7 +1692,6 @@
             text-overflow: ellipsis;
         }
 
-        /* SWITCH */
         .jbh-switch {
             position: relative;
             width: 36px;
@@ -2656,7 +1722,6 @@
             transform: translateX(16px);
         }
 
-        /* BUTTON */
         #jbh-auto-btn {
             width: 100%;
             padding: 14px 0;
@@ -2672,11 +1737,9 @@
         }
 
         #jbh-auto-btn:hover {
-            background: transparent;
-            color: white;
-            border: 2px solid white;
-            transform: translateY(-2px);
-            box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
+            background: ${THEME.accent};
+            color: #fff;
+            border-color: transparent;
         }
 
         #jbh-auto-btn:active {
@@ -2691,12 +1754,235 @@
             animation: jbh-pulse 1.5s infinite;
         }
 
+        #jbh-confirm-overlay {
+            position: fixed;
+            inset: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: max(16px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(16px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+            box-sizing: border-box;
+            background: transparent;
+            z-index: 2147483647;
+        }
+        .jbh-confirm-scrim {
+            position: absolute;
+            inset: 0;
+            background: rgba(8, 8, 12, 0.62);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            cursor: pointer;
+            z-index: 0;
+        }
+        #jbh-confirm-dialog {
+            position: relative;
+            z-index: 1;
+            isolation: isolate;
+            box-sizing: border-box;
+            cursor: default;
+            width: min(420px, 100%);
+            max-height: 100%;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+            padding: 28px;
+            overflow: hidden;
+            color: ${THEME.textMain};
+            background: ${THEME.bgSolid};
+            border-radius: ${THEME.radius};
+            border: ${THEME.border};
+            box-shadow: ${THEME.shadow};
+            font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Roboto, sans-serif;
+            animation: jbh-fade-in 0.5s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+        }
+        .jbh-confirm-noise {
+            position: absolute;
+            inset: 0;
+            background-image: ${THEME.noise};
+            opacity: ${THEME.noiseOpacity};
+            pointer-events: none;
+            z-index: 0;
+        }
+        .jbh-confirm-title {
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: ${THEME.textDim};
+            text-align: center;
+            flex-shrink: 0;
+            position: relative;
+            z-index: 1;
+        }
+        .jbh-confirm-list {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            overflow-y: auto;
+            flex: 1 1 auto;
+            min-height: 0;
+            padding: 4px 0;
+            position: relative;
+            z-index: 1;
+        }
+        .jbh-confirm-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 13px;
+            padding: 10px 14px;
+            border-radius: 12px;
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            opacity: 0.4;
+        }
+        .jbh-confirm-row.is-target {
+            background: ${THEME.accent}10;
+            border: 1px solid ${THEME.accent}22;
+            opacity: 1;
+        }
+        .jbh-confirm-name {
+            flex: 1;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            margin-right: 12px;
+            font-weight: 500;
+        }
+        .jbh-confirm-val {
+            font-weight: 700;
+            flex-shrink: 0;
+            color: ${THEME.textDim};
+            font-size: 14px;
+        }
+        .jbh-confirm-row.is-target .jbh-confirm-val {
+            color: ${THEME.accent};
+        }
+        .jbh-confirm-total {
+            text-align: center;
+            font-size: 14px;
+            font-weight: 500;
+            padding: 16px 0 0;
+            border-top: 1px solid rgba(255, 255, 255, 0.05);
+            flex-shrink: 0;
+            position: relative;
+            z-index: 1;
+        }
+        .jbh-confirm-total-label {
+            color: ${THEME.textDim};
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            display: block;
+            margin-bottom: 4px;
+        }
+        .jbh-confirm-total-value {
+            color: ${THEME.accent};
+            font-weight: 800;
+            font-size: 24px;
+        }
+        .jbh-confirm-total-meta {
+            color: ${THEME.textDark};
+            font-size: 11px;
+            margin-top: 4px;
+        }
+        .jbh-confirm-actions {
+            display: flex;
+            gap: 12px;
+            flex-shrink: 0;
+            position: relative;
+            z-index: 1;
+        }
+        .jbh-confirm-cancel,
+        .jbh-confirm-ok {
+            padding: 14px;
+            border-radius: 12px;
+            font-size: 14px;
+            cursor: pointer;
+            transition: background 0.2s, color 0.2s, box-shadow 0.2s, transform 0.2s;
+        }
+        .jbh-confirm-cancel {
+            flex: 1;
+            flex-shrink: 0;
+            border: 1px solid rgba(255, 255, 255, 0.22);
+            background: rgba(255, 255, 255, 0.14);
+            color: #fff;
+            font-weight: 600;
+        }
+        .jbh-confirm-cancel:hover {
+            background: rgba(255, 255, 255, 0.22);
+        }
+        .jbh-confirm-ok {
+            flex: 1.5;
+            border: none;
+            background: ${THEME.textMain};
+            color: ${THEME.bgSolid};
+            font-weight: 700;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+        }
+        .jbh-confirm-ok:hover {
+            background: ${THEME.accent};
+            color: #fff;
+            transform: translateY(-2px);
+            box-shadow: 0 8px 25px ${THEME.accent}44;
+        }
+        .jbh-eff-confirm-btn {
+            position: fixed !important;
+            z-index: 2147483647 !important;
+            box-sizing: border-box;
+        }
+
+        html.jbh-eff-on button[aria-label="View Next Sale"]:not(#jbh-eff-next-btn) {
+            visibility: hidden !important;
+            pointer-events: none !important;
+            transition: none !important;
+            animation: none !important;
+            transform: none !important;
+        }
+
+        #jbh-eff-cluster {
+            position: fixed;
+            z-index: 2147483646;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .jbh-eff-btn {
+            margin: 0;
+            height: 36px;
+            padding: 0 12px;
+            border: none;
+            border-radius: 8px;
+            background: ${THEME.accent};
+            color: #fff;
+            font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Roboto, sans-serif;
+            font-size: 13px;
+            font-weight: 700;
+            letter-spacing: 0.01em;
+            cursor: pointer;
+            white-space: nowrap;
+            box-shadow: 0 1px 2px rgba(0, 0, 0, 0.15);
+        }
+        .jbh-eff-btn:hover:not(:disabled):not(.processing) {
+            background: ${THEME.bgSolid};
+            color: ${THEME.textMain};
+        }
+        .jbh-eff-btn:disabled {
+            opacity: 0.55;
+            cursor: not-allowed;
+        }
+        #jbh-eff-run-btn.processing {
+            background: #FF9500;
+            cursor: wait;
+            animation: jbh-pulse 1.5s infinite;
+        }
+
         @keyframes jbh-pulse {
             0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(255, 149, 0, 0.4); }
             50% { opacity: 0.8; box-shadow: 0 0 0 10px rgba(255, 149, 0, 0); }
         }
 
-        /* UNDO BUTTON */
         #jbh-undo-btn {
             width: 100%;
             padding: 10px 0;
@@ -2716,46 +2002,197 @@
             border-color: rgba(255, 59, 48, 0.4);
         }
 
-        /* SALE SUMMARY - glass inset */
         #jbh-sale-summary {
-            padding: 12px;
+            padding: 10px 12px;
             background: rgba(255, 255, 255, 0.04);
             border-radius: 14px;
             border: ${THEME.border};
-            position: relative;
+        }
+        .jbh-preview-head {
+            display: flex;
+            align-items: baseline;
+            justify-content: space-between;
+            gap: 8px;
+            margin-bottom: 8px;
+        }
+        .jbh-preview-total {
+            font-size: 20px;
+            font-weight: 800;
+            color: ${THEME.accent};
+            font-variant-numeric: tabular-nums;
+        }
+        .jbh-preview-meta {
+            font-size: 11px;
+            color: ${THEME.textDark};
+            flex-shrink: 0;
+        }
+        .jbh-preview-row {
+            display: flex;
+            justify-content: space-between;
+            gap: 8px;
+            font-size: 11px;
+            padding: 3px 0;
+        }
+        .jbh-preview-row.is-skip { opacity: 0.45; }
+        .jbh-preview-name {
             overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            color: #ccc;
         }
-        #jbh-sale-summary::before {
-            content: "";
-            position: absolute;
-            top: 0; left: 0; right: 0; bottom: 0;
-            background-image: ${THEME.noise};
-            opacity: 0.04;
-            pointer-events: none;
-            z-index: -1;
+        .jbh-preview-val {
+            flex-shrink: 0;
+            font-weight: 600;
+            color: ${THEME.accent};
+            font-variant-numeric: tabular-nums;
         }
+        .jbh-preview-row.is-skip .jbh-preview-val { color: #888; }
 
-        /* ROW INFO CARD */
+        .jbh-reason-box {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            margin-top: 10px;
+            position: relative;
+            z-index: 1;
+        }
+        .jbh-field-label {
+            font-size: 10px;
+            font-weight: 600;
+            letter-spacing: 0.8px;
+            text-transform: uppercase;
+            color: ${THEME.textDark};
+        }
+        .jbh-reason-select, .jbh-reason-comment {
+            width: 100%;
+            box-sizing: border-box;
+            padding: 9px 10px;
+            border-radius: 10px;
+            border: 1px solid rgba(255,255,255,0.1);
+            background: rgba(255,255,255,0.06);
+            color: ${THEME.textMain};
+            font-size: 13px;
+            font-family: inherit;
+            outline: none;
+        }
+        .jbh-reason-select:focus, .jbh-reason-comment:focus {
+            border-color: ${THEME.accent};
+        }
+        .jbh-reason-select option { background: #121218; color: #fff; }
+
+        .jbh-settings {
+            border-top: 1px solid rgba(255,255,255,0.06);
+            padding-top: 8px;
+        }
+        .jbh-settings > summary {
+            cursor: pointer;
+            font-size: 11px;
+            font-weight: 600;
+            letter-spacing: 0.6px;
+            text-transform: uppercase;
+            color: ${THEME.textDark};
+            list-style: none;
+            padding: 6px 0;
+        }
+        .jbh-settings > summary::-webkit-details-marker { display: none; }
+        .jbh-settings > summary::after { content: " ▾"; }
+        .jbh-settings[open] > summary::after { content: " ▴"; }
+
         .jbh-row-info {
-            background: ${THEME.bg} !important;
-            backdrop-filter: blur(${THEME.blur}) !important;
-            border: ${THEME.border} !important;
-            border-radius: ${THEME.radius} !important;
-            box-shadow: ${THEME.shadow} !important;
+            margin-top: 10px;
+            padding: 12px 14px;
+            background: ${THEME.bg};
+            backdrop-filter: blur(${THEME.blur});
+            border: ${THEME.border};
+            border-radius: 16px;
+            box-shadow: ${THEME.shadow};
+            color: ${THEME.textMain};
+            font-family: -apple-system, BlinkMacSystemFont, Inter, Segoe UI, Roboto, sans-serif;
             position: relative;
             overflow: hidden;
         }
-        .jbh-row-info::before {
-            content: "";
-            position: absolute;
-            top: 0; left: 0; right: 0; bottom: 0;
-            background-image: ${THEME.noise};
-            opacity: ${THEME.noiseOpacity};
-            pointer-events: none;
-            z-index: -1;
+        .jbh-row-main {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            position: relative;
+            z-index: 1;
         }
+        .jbh-row-kicker {
+            font-size: 10px;
+            font-weight: 600;
+            letter-spacing: 0.6px;
+            text-transform: uppercase;
+            color: ${THEME.textDim};
+            margin-bottom: 2px;
+        }
+        .jbh-row-value {
+            font-size: 18px;
+            font-weight: 700;
+            color: ${THEME.accent};
+            font-variant-numeric: tabular-nums;
+        }
+        .jbh-row-value.is-neg { color: #FF453A; }
+        .jbh-apply-btn {
+            flex-shrink: 0;
+            border: none;
+            background: ${THEME.textMain};
+            color: ${THEME.bgSolid};
+            font-weight: 700;
+            font-size: 13px;
+            padding: 10px 18px;
+            border-radius: 10px;
+            cursor: pointer;
+            font-family: inherit;
+        }
+        .jbh-apply-btn:hover { background: ${THEME.accent}; color: #fff; }
+        .jbh-apply-btn:disabled { opacity: 0.5; cursor: wait; }
+        .jbh-row-more {
+            margin-top: 10px;
+            padding-top: 10px;
+            border-top: 1px solid rgba(255,255,255,0.06);
+            position: relative;
+            z-index: 1;
+        }
+        .jbh-pct-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            margin-top: 8px;
+        }
+        .jbh-pct-btn {
+            border: 1px solid rgba(255,255,255,0.08);
+            background: rgba(255,255,255,0.05);
+            color: #fff;
+            border-radius: 8px;
+            padding: 6px 10px;
+            font-size: 12px;
+            font-weight: 600;
+            cursor: pointer;
+            font-family: inherit;
+        }
+        .jbh-pct-btn:hover { background: rgba(255,255,255,0.12); }
+        .jbh-pct-btn:disabled { opacity: 0.5; }
+        .jbh-row-extra {
+            display: flex;
+            gap: 8px;
+            margin-top: 8px;
+        }
+        .jbh-reset-btn {
+            border: 1px solid rgba(255, 69, 58, 0.3);
+            background: rgba(255, 69, 58, 0.08);
+            color: #FF453A;
+            border-radius: 8px;
+            padding: 6px 10px;
+            font-size: 11px;
+            font-weight: 700;
+            cursor: pointer;
+            white-space: nowrap;
+            font-family: inherit;
+        }
+        .jbh-reset-btn:hover { background: rgba(255, 69, 58, 0.18); }
 
-        /* TOAST - liquid glass */
         .jbh-toast {
             background: ${THEME.bg};
             backdrop-filter: blur(${THEME.blur});
@@ -2782,15 +2219,9 @@
         .jbh-toast.hiding {
             opacity: 0;
             transform: scale(0.9) translateY(10px);
-            margin-bottom: -40px; /* Collapse space */
-        }
-        
-        @keyframes jbh-pop-in {
-            from { opacity: 0; transform: scale(0.8); }
-            to { opacity: 1; transform: scale(1); }
+            margin-bottom: -40px;
         }
 
-        /* TOOLTIP - liquid glass */
         #jbh-tooltip {
             position: fixed;
             top: 0;
@@ -2841,39 +2272,32 @@
       document.head.appendChild(style);
     }
 
-    // --- BUILD UI ---
     const dock = document.createElement("div");
     dock.id = "jbh-dock";
 
     const wrap = document.createElement("div");
     wrap.id = "jbh-helper-wrap";
 
-    const savedPos = localStorage.getItem("jbh-wrap-position");
     const savedSize = localStorage.getItem("jbh-wrap-size");
-    let dockHasSavedPosition = false;
+    const savedPos = localStorage.getItem("jbh-wrap-position");
+    dock.style.right = "20px";
+    dock.style.bottom = "20px";
+    dock.style.left = "auto";
+    dock.style.top = "auto";
     if (savedPos) {
       try {
         const pos = JSON.parse(savedPos);
         const left = parseInt(pos.left, 10);
         const top = parseInt(pos.top, 10);
-        if (!isNaN(left) && !isNaN(top) &&
-            left >= 0 && left < window.innerWidth - 50 &&
-            top >= 0 && top < window.innerHeight - 50) {
-          dock.style.left = pos.left;
-          dock.style.top = pos.top;
+        if (!isNaN(left) && !isNaN(top)) {
+          dock.style.left = `${left}px`;
+          dock.style.top = `${top}px`;
           dock.style.right = "auto";
           dock.style.bottom = "auto";
-          dockHasSavedPosition = true;
-        } else {
-          localStorage.removeItem("jbh-wrap-position");
         }
       } catch {
         localStorage.removeItem("jbh-wrap-position");
       }
-    }
-    if (!dockHasSavedPosition) {
-      dock.style.right = "20px";
-      dock.style.bottom = "20px";
     }
 
     if (savedSize) {
@@ -2891,161 +2315,9 @@
         localStorage.removeItem("jbh-wrap-size");
       }
     } else {
-      wrap.style.width = "220px";
+      wrap.style.width = "280px";
     }
 
-    const calcWrap = document.createElement("div");
-    calcWrap.id = "jbh-calc-wrap";
-
-    const calcHead = document.createElement("div");
-    calcHead.className = "jbh-calc-head";
-    const calcTitle = document.createElement("div");
-    calcTitle.className = "jbh-calc-title";
-    calcTitle.textContent = "Calculator";
-    const calcClose = document.createElement("button");
-    calcClose.type = "button";
-    calcClose.className = "jbh-calc-close";
-    calcClose.textContent = "\u2715";
-    calcClose.title = "Hide calculator";
-    calcHead.append(calcTitle, calcClose);
-
-    const resultInput = document.createElement("input");
-    resultInput.type = "text";
-    resultInput.id = "jbh-calc-result";
-    resultInput.readOnly = true;
-    resultInput.value = "$0.00";
-    resultInput.setAttribute("aria-label", "Calculator result");
-
-    const exprInput = document.createElement("input");
-    exprInput.type = "text";
-    exprInput.id = "jbh-calc-expr";
-    exprInput.setAttribute("autocomplete", "off");
-    exprInput.setAttribute("spellcheck", "false");
-    exprInput.placeholder = "e.g. $50 - 20% or 12.5 * 4";
-    exprInput.setAttribute("aria-label", "Calculator expression");
-
-    const keyGrid = document.createElement("div");
-    keyGrid.className = "jbh-calc-keys";
-
-    function runCalcEval() {
-      const out = evalCurrencyExpr(exprInput.value);
-      if (out.ok) {
-        resultInput.value = formatCalcMoney(out.value);
-      } else {
-        resultInput.value = out.error;
-      }
-    }
-
-    function appendCalcKey(ch) {
-      exprInput.focus();
-      const start = exprInput.selectionStart ?? exprInput.value.length;
-      const end = exprInput.selectionEnd ?? exprInput.value.length;
-      const v = exprInput.value;
-      exprInput.value = v.slice(0, start) + ch + v.slice(end);
-      const pos = start + ch.length;
-      exprInput.setSelectionRange(pos, pos);
-    }
-
-    function mkCalcBtn(label, onClick, wide) {
-      const b = document.createElement("button");
-      b.type = "button";
-      b.textContent = label;
-      if (wide) b.classList.add("jbh-calc-wide");
-      b.addEventListener("click", (ev) => {
-        ev.preventDefault();
-        onClick();
-      });
-      return b;
-    }
-
-    keyGrid.append(
-      mkCalcBtn("C", () => {
-        exprInput.value = "";
-        resultInput.value = "$0.00";
-      }),
-      mkCalcBtn("\u232b", () => {
-        const start = exprInput.selectionStart ?? exprInput.value.length;
-        const end = exprInput.selectionEnd ?? exprInput.value.length;
-        if (start !== end) {
-          exprInput.value = exprInput.value.slice(0, start) + exprInput.value.slice(end);
-          exprInput.setSelectionRange(start, start);
-        } else if (start > 0) {
-          exprInput.value = exprInput.value.slice(0, start - 1) + exprInput.value.slice(end);
-          exprInput.setSelectionRange(start - 1, start - 1);
-        }
-      }),
-      mkCalcBtn("(", () => appendCalcKey("(")),
-      mkCalcBtn(")", () => appendCalcKey(")")),
-      mkCalcBtn("7", () => appendCalcKey("7")),
-      mkCalcBtn("8", () => appendCalcKey("8")),
-      mkCalcBtn("9", () => appendCalcKey("9")),
-      mkCalcBtn("\u00f7", () => appendCalcKey("/")),
-      mkCalcBtn("4", () => appendCalcKey("4")),
-      mkCalcBtn("5", () => appendCalcKey("5")),
-      mkCalcBtn("6", () => appendCalcKey("6")),
-      mkCalcBtn("\u00d7", () => appendCalcKey("*")),
-      mkCalcBtn("1", () => appendCalcKey("1")),
-      mkCalcBtn("2", () => appendCalcKey("2")),
-      mkCalcBtn("3", () => appendCalcKey("3")),
-      mkCalcBtn("\u2212", () => appendCalcKey("-")),
-      mkCalcBtn("0", () => appendCalcKey("0")),
-      mkCalcBtn(".", () => appendCalcKey(".")),
-      mkCalcBtn("%", () => appendCalcKey("%")),
-      mkCalcBtn("+", () => appendCalcKey("+")),
-      mkCalcBtn("$", () => appendCalcKey("$")),
-      mkCalcBtn("=", () => runCalcEval(), true)
-    );
-
-    exprInput.addEventListener("keydown", (e) => {
-      if (e.key === "Enter") {
-        e.preventDefault();
-        runCalcEval();
-      }
-    });
-
-    calcWrap.append(calcHead, resultInput, exprInput, keyGrid);
-
-    const launcher = document.createElement("button");
-    launcher.type = "button";
-    launcher.id = "jbh-calc-launcher";
-    launcher.setAttribute("aria-label", "Open calculator");
-    launcher.title = "Open calculator";
-    /* Handheld calculator: bezel + LCD + 3×3 keypad (inherits currentColor) */
-    launcher.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-      <rect x="2.75" y="1.5" width="18.5" height="21" rx="2.75" stroke="currentColor" stroke-width="1.35" stroke-linejoin="round"/>
-      <rect x="4.75" y="3.75" width="14.5" height="5.25" rx="1" fill="currentColor" fill-opacity="0.18" stroke="currentColor" stroke-width="0.85" stroke-opacity="0.35"/>
-      <rect x="5.25" y="4.35" width="13.5" height="1.35" rx="0.35" fill="currentColor" fill-opacity="0.12"/>
-      <g fill="currentColor" fill-opacity="0.88">
-        <rect x="4.85" y="11.15" width="3.15" height="2.45" rx="0.45"/>
-        <rect x="10.425" y="11.15" width="3.15" height="2.45" rx="0.45"/>
-        <rect x="16" y="11.15" width="3.15" height="2.45" rx="0.45"/>
-        <rect x="4.85" y="14.55" width="3.15" height="2.45" rx="0.45"/>
-        <rect x="10.425" y="14.55" width="3.15" height="2.45" rx="0.45"/>
-        <rect x="16" y="14.55" width="3.15" height="2.45" rx="0.45"/>
-        <rect x="4.85" y="17.95" width="3.15" height="2.45" rx="0.45"/>
-        <rect x="10.425" y="17.95" width="3.15" height="2.45" rx="0.45"/>
-        <rect x="16" y="17.95" width="3.15" height="2.45" rx="0.45"/>
-      </g>
-    </svg>`;
-
-    function syncCalcVisibility() {
-      const open = lsFlag(LS_KEY_CALC_OPEN);
-      calcWrap.style.display = open ? "flex" : "none";
-      launcher.style.display = open ? "none" : "flex";
-    }
-    calcClose.addEventListener("click", (e) => {
-      e.preventDefault();
-      localStorage.setItem(LS_KEY_CALC_OPEN, "false");
-      syncCalcVisibility();
-    });
-    launcher.addEventListener("click", (e) => {
-      e.preventDefault();
-      localStorage.setItem(LS_KEY_CALC_OPEN, "true");
-      syncCalcVisibility();
-      exprInput.focus();
-    });
-
-    // Shared Tooltip Element (append to body to avoid overflow clipping)
     let tooltip = document.getElementById("jbh-tooltip");
     if (!tooltip) {
       tooltip = document.createElement("div");
@@ -3053,14 +2325,12 @@
       document.body.appendChild(tooltip);
     }
 
-    // Drag Handle
     const dragHandle = document.createElement("div");
     dragHandle.className = "jbh-drag-handle";
     const title = document.createElement("div");
     title.className = "jbh-title";
-    title.textContent = "JB COMMISSION HELPER";
+    title.textContent = "Commission Helper";
 
-    // Minimize/collapse button
     const isCollapsedOnLoad = lsFlag(LS_KEY_COLLAPSED);
     const minimizeBtn = document.createElement("button");
     minimizeBtn.className = "jbh-minimize-btn";
@@ -3083,13 +2353,11 @@
     dragHandle.appendChild(dragIcon);
     wrap.appendChild(dragHandle);
 
-    // Content Container
     const content = document.createElement("div");
     content.className = "jbh-content";
     wrap.appendChild(content);
 
-    // Helper to create toggle row
-    const createToggle = (key, labelText, tooltipText, defaultOn = false) => {
+    const createToggle = (key, labelText, tooltipText, defaultOn = false, onChange) => {
         const label = document.createElement("label");
         label.className = "jbh-row";
         label.style.position = "relative"; 
@@ -3102,6 +2370,7 @@
         input.checked = lsFlag(key, defaultOn);
         input.addEventListener("change", () => {
             localStorage.setItem(key, input.checked ? "true" : "false");
+            onChange?.(input.checked);
         });
 
         const sw = document.createElement("div");
@@ -3109,21 +2378,19 @@
 
         label.append(span, input, sw);
 
-        // Tooltip Logic
         label.addEventListener("mouseenter", () => {
-            if (!tooltipText || !tooltipText.trim()) return;
+            if (!tooltipText?.trim()) return;
             tooltip.textContent = tooltipText;
-            // Position tooltip relative to viewport (since it's fixed)
             const rect = label.getBoundingClientRect();
             const wrapRect = wrap.getBoundingClientRect();
-            
-            // Calculate position: to the left of the wrap, vertically centered on the label
-            const topPosition = rect.top + (rect.height / 2);
-            const leftPosition = wrapRect.left - 10; // 10px gap from the wrap
-            
-            tooltip.style.top = `${topPosition}px`;
-            tooltip.style.left = `${leftPosition}px`;
-            tooltip.style.transform = `translateX(-100%) translateY(-50%)`;
+            tooltip.style.top = `${rect.top + rect.height / 2}px`;
+            if (wrapRect.left < 280) {
+              tooltip.style.left = `${wrapRect.right + 10}px`;
+              tooltip.style.transform = "translateY(-50%)";
+            } else {
+              tooltip.style.left = `${wrapRect.left - 10}px`;
+              tooltip.style.transform = "translateX(-100%) translateY(-50%)";
+            }
             tooltip.classList.add("visible");
         });
 
@@ -3134,24 +2401,31 @@
         return label;
     };
 
-    // Scrollable content area for toggles
     const scrollableContent = document.createElement("div");
     scrollableContent.className = "jbh-content-scrollable";
 
-    // Live sale summary (inserted at top of scrollable area)
     const summary = document.createElement("div");
     summary.id = "jbh-sale-summary";
     summary.style.display = "none";
     scrollableContent.appendChild(summary);
-    
-    scrollableContent.appendChild(createToggle(LS_KEY_ONLY_ZERO, "Edit $0 Commissions Only", "Only adjust products sold with $0 commission. \n\nOn by default so existing commissions are not overwritten. Turn off to adjust every line.", true));
-    scrollableContent.appendChild(createToggle(LS_KEY_CALC, "Add Formula/Calculation", "Add the math formula used to the reason/comment field. \n\n(e.g., 0.5% * $1000 = $5.00)"));
-    scrollableContent.appendChild(createToggle(LS_KEY_REASON, "Add Reason", "Add the explanation note to the reason/comment field. \n\n(e.g., 'IPS Multiplier', 'Main Product with attach/AC')"));
-    scrollableContent.appendChild(createToggle(LS_KEY_CONFIRM, "Confirm Before Running", "Show a confirmation dialog with a preview of all adjustments before applying them. \n\nOn by default.", true));
-    
+
+    const settings = el("details", "jbh-settings");
+    settings.appendChild(el("summary", "", "Options"));
+    settings.appendChild(createToggle(LS_KEY_ONLY_ZERO, "$0 only", "Only adjust lines that currently have $0 commission.", true));
+    settings.appendChild(createToggle(LS_KEY_CALC, "Add formula", "Include the calculation in the comment (e.g. 0.5% of $1000 = $5)."));
+    settings.appendChild(createToggle(LS_KEY_REASON, "Add note", "Include the explanation note (IPS, AppleCare, solo product, etc.)."));
+    settings.appendChild(createToggle(LS_KEY_CONFIRM, "Confirm first", "Preview every line before writing.", true));
+    settings.appendChild(createToggle(
+      LS_KEY_EFFICIENCY,
+      "Efficiency",
+      "Show Run Adjustment next to View Next Sale so you can adjust and move on with less mouse travel.",
+      false,
+      () => syncEfficiencyButton()
+    ));
+    scrollableContent.appendChild(settings);
+
     content.appendChild(scrollableContent);
 
-    // Button container that sticks to bottom
     const buttonContainer = document.createElement("div");
     buttonContainer.className = "jbh-button-container";
     const btn = document.createElement("button");
@@ -3160,7 +2434,6 @@
     btn.addEventListener("click", autoFixZeros);
     buttonContainer.appendChild(btn);
 
-    // Undo button (hidden by default, shown after running)
     const undoBtnEl = document.createElement("button");
     undoBtnEl.id = "jbh-undo-btn";
     undoBtnEl.textContent = "Undo Last Run";
@@ -3176,66 +2449,97 @@
       wrap.appendChild(handle);
     });
 
-    // Drag functionality
+    function isDockCustomPos() {
+      return !!(dock.style.left && dock.style.left !== "auto");
+    }
+
+    function applyDockPos(left, top) {
+      const maxLeft = Math.max(0, window.innerWidth - dock.offsetWidth);
+      const maxTop = Math.max(0, window.innerHeight - dock.offsetHeight);
+      dock.style.left = `${Math.max(0, Math.min(left, maxLeft))}px`;
+      dock.style.top = `${Math.max(0, Math.min(top, maxTop))}px`;
+      dock.style.right = "auto";
+      dock.style.bottom = "auto";
+    }
+
+    function saveDockPos() {
+      if (!isDockCustomPos()) {
+        localStorage.removeItem("jbh-wrap-position");
+        return;
+      }
+      const r = dock.getBoundingClientRect();
+      localStorage.setItem("jbh-wrap-position", JSON.stringify({
+        left: `${r.left}px`,
+        top: `${r.top}px`,
+      }));
+    }
+
+    function keepDockInViewport() {
+      const maxW = Math.max(200, window.innerWidth - 40);
+      const maxH = Math.max(150, window.innerHeight - 40);
+      if (wrap.offsetWidth > maxW) wrap.style.width = `${maxW}px`;
+      if (wrap.offsetHeight > maxH) wrap.style.height = `${maxH}px`;
+      if (!isDockCustomPos()) {
+        dock.style.right = "20px";
+        dock.style.bottom = "20px";
+        dock.style.left = "auto";
+        dock.style.top = "auto";
+        return;
+      }
+      const r = dock.getBoundingClientRect();
+      applyDockPos(r.left, r.top);
+    }
+
+    window.addEventListener("resize", keepDockInViewport);
+    window.visualViewport?.addEventListener("resize", keepDockInViewport);
+
     let isDragging = false;
     let dragStartX = 0;
     let dragStartY = 0;
-    let initialLeft = 0;
-    let initialTop = 0;
+    let dragOriginLeft = 0;
+    let dragOriginTop = 0;
 
     dragHandle.addEventListener("mousedown", (e) => {
-      if (e.target.closest(".jbh-resize-handle")) return;
+      if (e.button !== 0) return;
       if (e.target.closest(".jbh-minimize-btn")) return;
+      if (e.target.closest(".jbh-resize-handle")) return;
       isDragging = true;
       dock.classList.add("dragging");
+      const rect = dock.getBoundingClientRect();
       dragStartX = e.clientX;
       dragStartY = e.clientY;
-      const rect = dock.getBoundingClientRect();
-      initialLeft = rect.left;
-      initialTop = rect.top;
+      dragOriginLeft = rect.left;
+      dragOriginTop = rect.top;
+      applyDockPos(dragOriginLeft, dragOriginTop);
       e.preventDefault();
     });
 
     document.addEventListener("mousemove", (e) => {
-      if (isDragging) {
-        const deltaX = e.clientX - dragStartX;
-        const deltaY = e.clientY - dragStartY;
-        const newLeft = initialLeft + deltaX;
-        const newTop = initialTop + deltaY;
-
-        const maxLeft = window.innerWidth - dock.offsetWidth;
-        const maxTop = window.innerHeight - dock.offsetHeight;
-
-        dock.style.left = `${Math.max(0, Math.min(newLeft, maxLeft))}px`;
-        dock.style.top = `${Math.max(0, Math.min(newTop, maxTop))}px`;
-        dock.style.right = "auto";
-        dock.style.bottom = "auto";
-      }
+      if (!isDragging) return;
+      applyDockPos(dragOriginLeft + e.clientX - dragStartX, dragOriginTop + e.clientY - dragStartY);
     });
 
     document.addEventListener("mouseup", () => {
-      if (isDragging) {
-        isDragging = false;
-        dock.classList.remove("dragging");
-        const rect = dock.getBoundingClientRect();
-        localStorage.setItem("jbh-wrap-position", JSON.stringify({
-          left: `${rect.left}px`,
-          top: `${rect.top}px`
-        }));
-      }
+      if (!isDragging) return;
+      isDragging = false;
+      dock.classList.remove("dragging");
+      saveDockPos();
     });
 
-    // Resize functionality
     let isResizing = false;
     let resizeDirection = "";
     let resizeStartX = 0;
     let resizeStartY = 0;
     let initialWidth = 0;
     let initialHeight = 0;
-    let initialLeftResize = 0;
-    let initialTopResize = 0;
+    let initialDockLeft = 0;
+    let initialDockTop = 0;
+    let resizeFromCustom = false;
 
-    resizeHandles.forEach(direction => {
+    wrap.style.left = "";
+    wrap.style.top = "";
+
+    resizeHandles.forEach((direction) => {
       const handle = wrap.querySelector(`.jbh-resize-handle.${direction}`);
       handle.addEventListener("mousedown", (e) => {
         isResizing = true;
@@ -3243,94 +2547,65 @@
         wrap.classList.add("resizing");
         resizeStartX = e.clientX;
         resizeStartY = e.clientY;
-        const rect = wrap.getBoundingClientRect();
-        initialWidth = rect.width;
-        initialHeight = rect.height;
-        initialLeftResize = rect.left;
-        initialTopResize = rect.top;
+        const wrapRect = wrap.getBoundingClientRect();
+        const dockRect = dock.getBoundingClientRect();
+        initialWidth = wrapRect.width;
+        initialHeight = wrapRect.height;
+        initialDockLeft = dockRect.left;
+        initialDockTop = dockRect.top;
+        resizeFromCustom = isDockCustomPos();
+        if (resizeFromCustom) applyDockPos(initialDockLeft, initialDockTop);
+        wrap.style.left = "";
+        wrap.style.top = "";
         e.preventDefault();
         e.stopPropagation();
       });
     });
 
     document.addEventListener("mousemove", (e) => {
-      if (isResizing) {
-        const deltaX = e.clientX - resizeStartX;
-        const deltaY = e.clientY - resizeStartY;
-        let newWidth = initialWidth;
-        let newHeight = initialHeight;
-        let newLeft = initialLeftResize;
-        let newTop = initialTopResize;
+      if (!isResizing) return;
+      e.preventDefault();
+      const deltaX = e.clientX - resizeStartX;
+      const deltaY = e.clientY - resizeStartY;
+      let newWidth = initialWidth;
+      let newHeight = initialHeight;
 
-        if (resizeDirection.includes('e')) {
-          newWidth = initialWidth + deltaX;
-        }
-        if (resizeDirection.includes('w')) {
-          newWidth = initialWidth - deltaX;
-          newLeft = initialLeftResize + deltaX;
-        }
-        if (resizeDirection.includes('s')) {
-          newHeight = initialHeight + deltaY;
-        }
-        if (resizeDirection.includes('n')) {
-          newHeight = initialHeight - deltaY;
-          newTop = initialTopResize + deltaY;
-        }
+      if (resizeDirection.includes("e")) newWidth = initialWidth + deltaX;
+      if (resizeDirection.includes("w")) newWidth = initialWidth - deltaX;
+      if (resizeDirection.includes("s")) newHeight = initialHeight + deltaY;
+      if (resizeDirection.includes("n")) newHeight = initialHeight - deltaY;
 
-        // Apply constraints
-        const minWidth = 200;
-        const minHeight = 150;
-        const maxWidth = window.innerWidth;
-        const maxHeight = window.innerHeight;
+      newWidth = Math.max(200, Math.min(newWidth, window.innerWidth - 40));
+      newHeight = Math.max(150, Math.min(newHeight, window.innerHeight - 40));
 
-        newWidth = Math.max(minWidth, Math.min(newWidth, maxWidth));
-        newHeight = Math.max(minHeight, Math.min(newHeight, maxHeight));
+      wrap.style.width = `${newWidth}px`;
+      wrap.style.height = `${newHeight}px`;
 
-        // Adjust position if resizing from left or top
-        if (resizeDirection.includes('w')) {
-          const widthDelta = newWidth - initialWidth;
-          const adjustedLeft = initialLeftResize - widthDelta;
-          if (adjustedLeft >= 0 && adjustedLeft + newWidth <= window.innerWidth) {
-            wrap.style.left = `${adjustedLeft}px`;
-            wrap.style.right = "auto";
-          } else {
-            newWidth = initialWidth;
-          }
-        }
-        if (resizeDirection.includes('n')) {
-          const heightDelta = newHeight - initialHeight;
-          const adjustedTop = initialTopResize - heightDelta;
-          if (adjustedTop >= 0 && adjustedTop + newHeight <= window.innerHeight) {
-            wrap.style.top = `${adjustedTop}px`;
-            wrap.style.bottom = "auto";
-          } else {
-            newHeight = initialHeight;
-          }
-        }
-
-        wrap.style.width = `${newWidth}px`;
-        wrap.style.height = `${newHeight}px`;
+      if (resizeFromCustom) {
+        let left = initialDockLeft;
+        let top = initialDockTop;
+        if (resizeDirection.includes("w")) left = initialDockLeft - (newWidth - initialWidth);
+        if (resizeDirection.includes("n")) top = initialDockTop - (newHeight - initialHeight);
+        applyDockPos(left, top);
       }
     });
 
     document.addEventListener("mouseup", () => {
-      if (isResizing) {
-        isResizing = false;
-        wrap.classList.remove("resizing");
-        // Save size
-        const rect = wrap.getBoundingClientRect();
-        localStorage.setItem("jbh-wrap-size", JSON.stringify({
-          width: `${rect.width}px`,
-          height: `${rect.height}px`
-        }));
-      }
+      if (!isResizing) return;
+      isResizing = false;
+      wrap.classList.remove("resizing");
+      keepDockInViewport();
+      const rect = wrap.getBoundingClientRect();
+      localStorage.setItem("jbh-wrap-size", JSON.stringify({
+        width: `${rect.width}px`,
+        height: `${rect.height}px`,
+      }));
+      if (resizeFromCustom) saveDockPos();
     });
 
-    dock.appendChild(calcWrap);
-    dock.appendChild(launcher);
     dock.appendChild(wrap);
-    syncCalcVisibility();
     document.body.appendChild(dock);
+    keepDockInViewport();
     updateUIState();
   }
 

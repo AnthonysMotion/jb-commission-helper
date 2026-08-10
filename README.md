@@ -3,7 +3,7 @@
 A browser userscript that automatically calculates and adjusts commission values for retail sales on the JB Hi-Fi commission management system. This tool streamlines the commission adjustment process by intelligently categorizing products and applying the correct commission rates based on company policies.
 
 
-![Version](https://img.shields.io/badge/version-8.2.2-blue.svg)
+![Version](https://img.shields.io/badge/version-8.4.10-blue.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 
 ## Features
@@ -14,7 +14,6 @@ A browser userscript that automatically calculates and adjusts commission values
 - ⚡ **One-Click Adjustment** - Apply adjustments to all eligible items with a single button click
 - 🎨 **Modern Glassmorphism UI** - Sleek, modern interface that matches the commission system's design
 - 🔧 **Manual Override Options** - Quick percentage buttons (0.2%, 0.5%, 1%, 1.5%, 2%, 2.3%, 5%) for manual adjustments
-- 🧮 **Side Calculator** - Optional currency calculator to the left of the control panel (supports expressions like `$50 - 20%`)
 - 📝 **Detailed Notes** - Automatically generates appropriate notes and comments for each adjustment
 - 🔄 **Context-Aware Logic** - Handles complex scenarios like product attaches, multipliers, and dynamic product classification
 
@@ -47,13 +46,10 @@ The script will automatically activate when you visit the commission system webs
 
 1. Navigate to a **Sale Overview** page
 2. The script will display a floating control panel in the bottom-right corner
-3. Configure your preferences using the toggles:
-   - **Edit $0 Commissions Only** (on by default): Only adjust items with $0 commission
-   - **Add Formula/Calculation**: Include calculation formulas in comments
-   - **Add Reason**: Include explanation notes in comments
-   - **Confirm Before Running** (on by default): Preview every line before applying
-4. Click **"Run Adjustment"** to automatically adjust all eligible items
-5. Review the confirmation dialog (if enabled) and the notifications that appear at the bottom of the screen
+3. Set **Reason** and an optional note on a product card (shared across the sale)
+4. Check the live total, then click **Run Adjustment** (or **Apply** on a single product)
+5. Open **Options** for $0-only, formula/note comments, confirm-before-run, and **Efficiency** (Run Adjustment beside View Next Sale)
+6. Confirm if prompted (Enter / Esc). Progress shows on the Run button.
 
 Suggested values never go below an existing commission greater than $0 (shown as **kept original**). Sale preview and the confirm dialog show **To write** (lines that will be saved) separately from the full sale preview total when some lines are skipped.
 
@@ -148,17 +144,14 @@ The script automatically categorizes products into:
 ## UI Components
 
 ### Control Panel
-- **Location**: Fixed position, bottom-right corner (draggable dock: calculator to the left when open, main panel on the right)
-- **Features**: Toggle switches, main adjustment button; optional currency calculator (open via the **calculator icon** to the left of the panel, close with **×** in the calculator header; state saved in localStorage)
+- **Location**: Bottom-right by default; drag the header to move (position saved; stays on-screen if the viewport resizes)
+- **Features**: Sale preview, toggles, Run Adjustment; optional Efficiency button next to View Next Sale
 - **Styling**: Dark glassmorphism theme with blur effects
 
 ### Product Info Box
-- **Location**: Top-right of each product card
-- **Features**: 
-  - Automatic adjustment preview
-  - Product categorization details
-  - Manual percentage buttons
-- **Styling**: Matches control panel aesthetic
+- Compact suggested rate + **Apply** on each product
+- Reason + optional note on each product card (synced across the sale)
+- Extra rates / custom % / reset always visible under **Other rates**
 
 ### Notifications
 - **Location**: Center-bottom of screen
@@ -203,10 +196,9 @@ jb-commission-helper/
 ### Key Functions
 
 - `computeCommission()`: Core logic for determining commission rates
-- `autoFixZeros()`: Main function that processes all items
-- `injectRowInfo()`: Injects UI elements into product cards
-- `getProductName()`: Extracts product name from DOM
-- `isAppleProduct()`, `isSamsungDevice()`, etc.: Product categorization helpers
+- `buildSaleContext()`: Shared sale flags (primary / AirPods / AppleCare multipliers)
+- `autoFixZeros()`: Bulk adjust eligible items
+- `injectRowInfo()`: Per-product suggestion + override UI
 
 ### Contributing
 
