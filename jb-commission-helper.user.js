@@ -2,7 +2,7 @@
 // ==UserScript==
 // @name         JB Commission Helper
 // @namespace    jb-commission-helper
-// @version      8.4.10
+// @version      8.4.11
 // @description  automatically does ur jb commmissions for u :) anthonythach.com
 // @match        https://jbh-all-commissions-ui-webapp-prod.azurewebsites.net/*
 // @run-at       document-idle
@@ -297,20 +297,15 @@
 
     let appleItem = isAppleProduct(nameU, container) && !appleCareItem;
     let accessoryItem = isAccessory(nameU, container);
-    if (airPods) {
-      appleItem = ctx.saleItemCount === 1;
-      accessoryItem = !appleItem;
-    } else if (appleItem) {
-      accessoryItem = false;
-    }
+    if (appleItem) accessoryItem = false;
 
     if (appleCareItem) {
       return rateResult(saleTotal, 0.05, "AppleCare", "AppleCare 5%", nameRaw);
     }
 
-    // Solo AirPods 0.5% (not the usual 0.2% no-attach rate); Q-stock still uses Q rates
-    if (airPods && stockType !== "Q" && solo) {
-      return rateResult(saleTotal, 0.005, "Solo Apple (AirPods)", "Main Product with no attach 0.5%", nameRaw);
+    // AirPods are always 0.5% — never the solo-primary 0.2% rate, no IPS/AC multipliers
+    if (airPods) {
+      return rateResult(saleTotal, 0.005, "AirPods", "AirPods 0.5%", nameRaw);
     }
 
     if (stockType === "Q") {
@@ -345,17 +340,14 @@
     let note = "";
     let multiplier = 1;
 
-    // AirPods with others stay 0.5% flat (no IPS / AppleCare multipliers)
-    if (!(airPods && accessoryItem)) {
-      if (ctx.appleCareSoldWithAppleAndOthers && !appleCareItem && !appleItem) {
-        multiplier = 2.5;
-        label += " ×2.5 (AppleCare bundle)";
-        note = "AppleCare Multiplier 0.5% * 2.5";
-      } else if (ctx.primarySoldWithOthers && !appleCareItem) {
-        multiplier = 2;
-        label += " ×2 (IPS bundle)";
-        note = "IPS Multiplier 0.5% * 2";
-      }
+    if (ctx.appleCareSoldWithAppleAndOthers && !appleCareItem && !appleItem) {
+      multiplier = 2.5;
+      label += " ×2.5 (AppleCare bundle)";
+      note = "AppleCare Multiplier 0.5% * 2.5";
+    } else if (ctx.primarySoldWithOthers && !appleCareItem) {
+      multiplier = 2;
+      label += " ×2 (IPS bundle)";
+      note = "IPS Multiplier 0.5% * 2";
     }
 
     return rateResult(saleTotal, 0.005 * multiplier, label, note, nameRaw, {

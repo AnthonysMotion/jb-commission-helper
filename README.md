@@ -3,7 +3,7 @@
 A browser userscript that automatically calculates and adjusts commission values for retail sales on the JB Hi-Fi commission management system. This tool streamlines the commission adjustment process by intelligently categorizing products and applying the correct commission rates based on company policies.
 
 
-![Version](https://img.shields.io/badge/version-8.4.10-blue.svg)
+![Version](https://img.shields.io/badge/version-8.4.11-blue.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 
 ## Features
@@ -109,8 +109,7 @@ The script implements the following commission structure:
 ### Special Cases
 
 #### AirPods
-- **Solo**: 0.2% when sold alone
-- **With Primary Product**: 0.5% (treated as accessory, no multipliers)
+- **Rate**: 0.5% always (solo or attached; no 0.2% solo-primary rate, no IPS / AppleCare multipliers)
 
 #### Samsung Devices
 - Samsung Galaxy phones and tablets follow primary product rules
@@ -120,7 +119,7 @@ The script implements the following commission structure:
 
 The script automatically categorizes products into:
 
-- **Apple Primary**: iPhones, iPads, MacBooks, iMacs, Apple Watch, AirPods (when solo)
+- **Apple Primary**: iPhones, iPads, MacBooks, iMacs, Apple Watch (AirPods are always 0.5%, not primary)
 - **Primary (Non-Apple)**: Samsung devices, cameras, laptops (Lenovo, HP, MSI, ASUS, Microsoft Surface)
 - **Accessory**: Cases, cables, chargers, headphones, speakers, etc.
 - **Big Device**: Large electronics that don't fit other categories
