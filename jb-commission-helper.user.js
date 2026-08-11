@@ -3,7 +3,7 @@
 // @name         JB Commission Helper
 // @namespace    jb-commission-helper
 // @version      8.4.11
-// @description  automatically does ur jb commmissions for u :) anthonythach.com
+// @description  automatically does ur jb commissions for u :) anthonythach.com
 // @match        https://jbh-all-commissions-ui-webapp-prod.azurewebsites.net/*
 // @run-at       document-idle
 // @grant        none
