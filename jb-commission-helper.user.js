@@ -906,7 +906,7 @@
     }
 
     if (selectedReason === "Other" && !(selectedOtherText || "").trim()) {
-      notify("Please enter a comment when 'Other' is selected.");
+      notify("Please enter a comment when Other is selected.");
       return;
     }
 

@@ -84,7 +84,7 @@ The script implements the following commission structure:
 ### AppleCare
 - **Rate**: 5% commission
 - **Always applies**: Regardless of other products in the sale
-- **Title detection**: Recognises names containing `APPLECARE`, `APPLECARE+`, `APPLE CARE`, `AC+` / `AC +`, `CARE+`, or standalone `AC` when paired with Apple product / care wording (e.g. iPhone, iPad, coverage) so missed AppleCare lines still get the 5% suggestion and **Run Adjustment** value when commission is $0 (with **Edit $0 Commissions Only** enabled).
+- **Title detection**: Recognises names containing `APPLECARE`, `APPLECARE+`, `APPLE CARE`, `AC+` / `AC +`, `CARE+`, or standalone `AC` when paired with Apple product / care wording (e.g. iPhone, iPad, coverage) so missed AppleCare lines still get the 5% suggestion and **Run Adjustment** value when commission is $0 (with **$0 only** enabled).
 
 ### Q Stock (Clearance Items)
 
@@ -138,7 +138,7 @@ The script automatically categorizes products into:
 ### Data Persistence
 - Settings are stored in browser localStorage
 - Preferences persist across browser sessions
-- **Edit $0 Commissions Only** and **Confirm Before Running** default on until you change them (missing keys are treated as enabled)
+- **$0 only** and **Confirm first** default on until you change them (missing keys are treated as enabled)
 
 ## UI Components
 
