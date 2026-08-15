@@ -863,7 +863,7 @@
         await sleep(250);
       }
 
-      notify("Undo complete");
+      notify("Undo complete.");
       lastRunData = null;
       if (undoBtn) undoBtn.style.display = "none";
     } finally {
@@ -1219,7 +1219,7 @@
     const val = absoluteValue != null ? trunc3(absoluteValue) : trunc3(saleTotal * rate);
     const btn = getAdjustButton(c);
     if (!btn) {
-      notify("Adjust button not found");
+      notify("Adjust button not found.");
       return false;
     }
 
@@ -1237,7 +1237,7 @@
       commentText,
       reasonLabel: selectedReason,
     });
-    notify(ok ? `Applied ${pct}` : "Failed to apply adjustment");
+    notify(ok ? `Applied ${pct}.` : "Failed to apply adjustment.");
     return ok;
   }
 
@@ -1394,7 +1394,7 @@
               const raw = customInput.value.trim().replace(/%$/, "");
               const pct = parseFloat(raw);
               if (!raw || Number.isNaN(pct) || pct < 0 || pct > 100) {
-                notify("Enter a % between 0 and 100");
+                notify("Enter a % between 0 and 100.");
                 return;
               }
               customInput.disabled = true;
